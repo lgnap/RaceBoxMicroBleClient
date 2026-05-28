@@ -57,9 +57,13 @@ public:
     // Set callback for non-live packets (Recorder / Downloader use this).
     void setPacketCallback(RaceBoxPacketCallback cb) { _packetCb = std::move(cb); }
 
-    // Optional callback invoked each time the FIFO overflows (oldest bytes dropped).
-    // The argument is the cumulative overflow count since begin().
-    // Default: no callback (silent overflow, same as before).
+    // Optional callback invoked when the FIFO overflows (oldest bytes dropped).
+    // The argument is the cumulative dropped-byte count since begin().
+    // Default: no callback (silent overflow — same behaviour as before).
+    //
+    // ⚠ Callback context: invoked from the NimBLE task, not from update().
+    // Keep it short (e.g. set a flag). Do NOT call sendCommand() or any
+    // other RaceBoxBle method from within this callback.
     void setOverflowCallback(std::function<void(uint32_t)> cb) { _overflowCb = std::move(cb); }
 
     // Total number of bytes dropped due to FIFO overflow since begin().

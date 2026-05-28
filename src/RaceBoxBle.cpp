@@ -149,20 +149,25 @@ void RaceBoxBle::_fifoPush(const uint8_t* data, size_t len) {
     // Note on priority: xSemaphoreCreateMutex() enables priority inheritance on
     // ESP-IDF, so the main-loop task temporarily inherits the BLE task priority
     // while holding the mutex. No further configuration needed.
+    bool overflowed = false;
     xSemaphoreTake(_fifoMutex, portMAX_DELAY);
     for (size_t i = 0; i < len; i++) {
         if (_fifoLen >= RACEBOX_FIFO_SIZE) {
-            // Overflow: drop oldest byte and notify caller
+            // Overflow: drop oldest byte
             _fifoTail = (_fifoTail + 1) % RACEBOX_FIFO_SIZE;
             _fifoLen--;
             _fifoOverflowCount++;
-            if (_overflowCb) _overflowCb(_fifoOverflowCount);
+            overflowed = true;
         }
         _fifo[_fifoHead] = data[i];
         _fifoHead = (_fifoHead + 1) % RACEBOX_FIFO_SIZE;
         _fifoLen++;
     }
     xSemaphoreGive(_fifoMutex);
+    // Notify outside the mutex and after the FIFO is in a consistent state.
+    // The callback runs on the NimBLE task — it must NOT call RaceBoxBle
+    // methods that acquire the mutex (e.g. _drainFifo), as that would deadlock.
+    if (overflowed && _overflowCb) _overflowCb(_fifoOverflowCount);
 }
 
 bool RaceBoxBle::_fifoPeek(uint8_t* out, size_t len) const {
