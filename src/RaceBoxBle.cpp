@@ -152,9 +152,11 @@ void RaceBoxBle::_fifoPush(const uint8_t* data, size_t len) {
     xSemaphoreTake(_fifoMutex, portMAX_DELAY);
     for (size_t i = 0; i < len; i++) {
         if (_fifoLen >= RACEBOX_FIFO_SIZE) {
-            // Overflow: drop oldest byte
+            // Overflow: drop oldest byte and notify caller
             _fifoTail = (_fifoTail + 1) % RACEBOX_FIFO_SIZE;
             _fifoLen--;
+            _fifoOverflowCount++;
+            if (_overflowCb) _overflowCb(_fifoOverflowCount);
         }
         _fifo[_fifoHead] = data[i];
         _fifoHead = (_fifoHead + 1) % RACEBOX_FIFO_SIZE;

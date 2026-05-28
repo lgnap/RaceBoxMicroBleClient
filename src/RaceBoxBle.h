@@ -57,6 +57,14 @@ public:
     // Set callback for non-live packets (Recorder / Downloader use this).
     void setPacketCallback(RaceBoxPacketCallback cb) { _packetCb = std::move(cb); }
 
+    // Optional callback invoked each time the FIFO overflows (oldest bytes dropped).
+    // The argument is the cumulative overflow count since begin().
+    // Default: no callback (silent overflow, same as before).
+    void setOverflowCallback(std::function<void(uint32_t)> cb) { _overflowCb = std::move(cb); }
+
+    // Total number of bytes dropped due to FIFO overflow since begin().
+    uint32_t fifoOverflowCount() const { return _fifoOverflowCount; }
+
     // Encode `pkt` as a UBX frame and write it to the RX characteristic.
     // Returns false if not connected or the characteristic is unavailable.
     bool sendCommand(const UbxPacket& pkt);
@@ -71,6 +79,8 @@ public:
 private:
     RaceBoxLiveCallback   _liveCb;
     RaceBoxPacketCallback _packetCb;
+    std::function<void(uint32_t)> _overflowCb;
+    uint32_t _fifoOverflowCount = 0;
 
     bool _connected = false;
     bool _doConnect = false;
