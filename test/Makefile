@@ -1,7 +1,8 @@
 UNITY   ?= /tmp/Unity-2.5.2/src
 CXX     := g++
 CXXFLAGS := -std=c++17 -I ../test/mocks -I ../src -I $(UNITY)
-SRC_FILES := $(filter-out ../src/RaceBoxBle.cpp, $(wildcard ../src/*.cpp))
+# Exclude Arduino/BLE-dependent files (RaceBoxBle, Recorder, Downloader)
+SRC_FILES := $(filter-out ../src/RaceBoxBle.cpp ../src/RaceBoxRecorder.cpp ../src/RaceBoxDownloader.cpp, $(wildcard ../src/*.cpp))
 
 .PHONY: all test download-unity
 
