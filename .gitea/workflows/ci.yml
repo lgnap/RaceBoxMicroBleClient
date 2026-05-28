@@ -30,7 +30,11 @@ jobs:
         run: |
           UNITY=/tmp/Unity-2.5.2/src
           FAIL=0
-          SRC_FILES=$(find src -name "*.cpp" ! -name "RaceBoxBle.cpp" | tr '\n' ' ')
+          # Exclude Arduino/BLE-dependent files — tested on device, not natively
+          SRC_FILES=$(find src -name "*.cpp" \
+            ! -name "RaceBoxBle.cpp" \
+            ! -name "RaceBoxRecorder.cpp" \
+            ! -name "RaceBoxDownloader.cpp" | tr '\n' ' ')
           for test in test/test_*.cpp; do
             name=$(basename "$test" .cpp)
             g++ -std=c++17 -I test/mocks -I src -I "$UNITY" \
