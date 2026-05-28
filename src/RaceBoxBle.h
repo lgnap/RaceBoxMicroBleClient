@@ -5,6 +5,8 @@
 #include <functional>
 #include "ubx.h"
 #include "RaceBoxData.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 
 // ── BLE UUIDs (Nordic UART Service, used by RaceBox devices) ─────────────────
 static const char* RACEBOX_SERVICE_UUID = "6E400001-B5A3-F393-E0A9-E50E24DCCA9E";
@@ -75,6 +77,11 @@ private:
     bool _doScan    = false;
 
     // ── FIFO ring buffer ──────────────────────────────────────────────────────
+    // _fifoMutex protects all FIFO members. _fifoPush() is called from the
+    // NimBLE task; _drainFifo() is called from the Arduino main loop via
+    // update(). Both acquire the mutex before touching the FIFO.
+    SemaphoreHandle_t _fifoMutex = nullptr;
+
     uint8_t _fifo[RACEBOX_FIFO_SIZE];
     size_t  _fifoHead = 0;  // write index
     size_t  _fifoTail = 0;  // read index
