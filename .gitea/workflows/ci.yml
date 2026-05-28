@@ -1,0 +1,43 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  native-tests:
+    name: Unit tests (native g++)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Cache Unity test framework
+        uses: actions/cache@v3
+        with:
+          path: /tmp/Unity-2.5.2
+          key: unity-2.5.2
+
+      - name: Download Unity test framework
+        run: |
+          if [ ! -d /tmp/Unity-2.5.2 ]; then
+            curl -sL https://github.com/ThrowTheSwitch/Unity/archive/refs/tags/v2.5.2.tar.gz \
+              | tar -xz -C /tmp
+          fi
+
+      - name: Build and run native tests
+        run: |
+          UNITY=/tmp/Unity-2.5.2/src
+          FAIL=0
+          SRC_FILES=$(find src -name "*.cpp" ! -name "RaceBoxBle.cpp" | tr '\n' ' ')
+          for test in test/test_*.cpp; do
+            name=$(basename "$test" .cpp)
+            g++ -std=c++17 -I test/mocks -I src -I "$UNITY" \
+              $SRC_FILES "$UNITY/unity.c" "$test" -o "/tmp/$name" 2>&1
+            echo "=== $name ==="
+            if ! "/tmp/$name"; then
+              FAIL=$((FAIL + 1))
+            fi
+          done
+          exit $FAIL
