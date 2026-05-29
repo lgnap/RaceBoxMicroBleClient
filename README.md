@@ -27,7 +27,7 @@ Based on [RaceBox BLE Protocol Description rev 8](https://www.racebox.pro/produc
 ```ini
 [env:your_board]
 lib_deps =
-    https://github.com/lgnap/RaceBoxMicroBleClient.git
+    https://github.com/LGnap/RaceBoxMicroBleClient.git
 ```
 
 ### Arduino IDE
