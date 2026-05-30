@@ -55,17 +55,18 @@ static UbxPacket makeLivePacket() {
     writeU32(p, 52, 9000000u);             // heading: 9000000 * 1e-5 = 90.0 deg
     writeU32(p, 56, 500u);                 // speedAccuracy: 500 mm/s = 1.8 km/h
 
-    // IMU
-    writeI16(p, 60, 100);   // gForceX = 100 mG
-    writeI16(p, 62, -200);  // gForceY = -200 mG
-    writeI16(p, 64, 980);   // gForceZ ≈ 1G
-    writeI16(p, 66, 50);    // rotRateX = 50 * 0.01 = 0.5 deg/s
-    writeI16(p, 68, -30);   // rotRateY
-    writeI16(p, 70, 10);    // rotRateZ
+    // Battery (offset 67): bit7=charging, bits[6..0]=level%
+    p[67] = 85;  // 85%, not charging (bit7=0)
 
-    // Battery: 85%, not charging
-    p[72] = 85;
-    p[73] = 0x00;
+    // IMU — correct offsets per RaceBox BLE Protocol rev 8
+    // GForce: X=front/back, Y=right/left, Z=up/down
+    writeI16(p, 68, 100);   // gForceX = 100 mG
+    writeI16(p, 70, -200);  // gForceY = -200 mG
+    writeI16(p, 72, 980);   // gForceZ ≈ 1G
+    // RotRate: X=roll, Y=pitch, Z=yaw
+    writeI16(p, 74, 50);    // rotRateX = 0.50 deg/s
+    writeI16(p, 76, -30);   // rotRateY = -0.30 deg/s
+    writeI16(p, 78, 10);    // rotRateZ = 0.10 deg/s
 
     return pkt;
 }
@@ -174,7 +175,7 @@ void test_battery_level_and_charging() {
 
 void test_battery_charging_flag() {
     UbxPacket pkt = makeLivePacket();
-    pkt.payload[73] = 0x01;  // charging bit set
+    pkt.payload[67] |= 0x80;  // set bit7 = charging
     RaceBoxData d{};
     raceBoxParse(pkt, d);
     TEST_ASSERT_TRUE(d.charging);
@@ -210,6 +211,84 @@ void test_payload_too_short_returns_false() {
     TEST_ASSERT_FALSE(raceBoxParse(pkt, d));
 }
 
+// ── Real packet from official RaceBox BLE Protocol rev 8 (page 7-8) ──────────
+//
+// Example Mini/Mini S frame (90 bytes = 6 header + 80 payload + 2 checksum).
+// Expected values from the PDF table:
+//   Year=2022, Month=1, Day=10, Hour=8, Minute=51, Second=8
+//   fixStatus=3, numSVs=11, lon=23.2887238°, lat=42.6719035°
+//   wgsAlt=625.761m, alt=590.095m, speed≈0.126 km/h, heading=0°
+//   battery=89%, not charging
+//   gForceX=-3 mG, gForceY=113 mG, gForceZ=974 mG (≈1G ✓)
+//   rotRateX=-209, rotRateY=86, rotRateZ=-4
+static const uint8_t kPdfFrame[] = {
+    0xB5, 0x62, 0xFF, 0x01, 0x50, 0x00,
+    0xA0, 0xE7, 0x0C, 0x07,  // [0..3]  iTOW
+    0xE6, 0x07,              // [4..5]  year=2022
+    0x01,                    // [6]     month=1
+    0x0A,                    // [7]     day=10
+    0x08,                    // [8]     hour=8
+    0x33,                    // [9]     minute=51
+    0x08,                    // [10]    second=8
+    0x37,                    // [11]    validityFlags
+    0x19, 0x00, 0x00, 0x00,  // [12..15] tAcc
+    0x2A, 0xAD, 0x4D, 0x0E,  // [16..19] nano
+    0x03,                    // [20]    fixStatus=3
+    0x01,                    // [21]    flags
+    0xEA,                    // [22]    flags2
+    0x0B,                    // [23]    numSVs=11
+    0xC6, 0x93, 0xE1, 0x0D,  // [24..27] longitude
+    0x3B, 0x37, 0x6F, 0x19,  // [28..31] latitude
+    0x61, 0x8C, 0x09, 0x00,  // [32..35] wgsAltitude=625761mm
+    0x0F, 0x01, 0x09, 0x00,  // [36..39] altitudeMSL=590095mm... wait
+    0x9C, 0x03, 0x00, 0x00,  // [40..43] hAcc
+    0x2C, 0x07, 0x00, 0x00,  // [44..47] vAcc
+    0x23, 0x00, 0x00, 0x00,  // [48..51] speed=35 mm/s
+    0x00, 0x00, 0x00, 0x00,  // [52..55] heading=0
+    0xD0, 0x00, 0x00, 0x00,  // [56..59] speedAccuracy
+    0x88, 0xA9, 0xDD, 0x00,  // [60..63] headingAccuracy (not parsed)
+    0x2C, 0x01,              // [64..65] PDOP (not parsed)
+    0x00,                    // [66]     Lat/Lon Flags (not parsed)
+    0x59,                    // [67]     battery=89%, bit7=0 → not charging
+    0xFD, 0xFF,              // [68..69] gForceX=-3 mG
+    0x71, 0x00,              // [70..71] gForceY=113 mG
+    0xCE, 0x03,              // [72..73] gForceZ=974 mG (≈1G ✓)
+    0x2F, 0xFF,              // [74..75] rotRateX=-209
+    0x56, 0x00,              // [76..77] rotRateY=86
+    0xFC, 0xFF,              // [78..79] rotRateZ=-4
+    0x06, 0xDB              // checksum
+};
+
+void test_parse_real_packet_from_pdf() {
+    UbxPacket pkt{};
+    TEST_ASSERT_TRUE(ubxDecode(kPdfFrame, sizeof(kPdfFrame), pkt));
+
+    RaceBoxData d{};
+    TEST_ASSERT_TRUE(raceBoxParse(pkt, d));
+
+    TEST_ASSERT_EQUAL_UINT16(2022, d.year);
+    TEST_ASSERT_EQUAL_UINT8(1,  d.month);
+    TEST_ASSERT_EQUAL_UINT8(10, d.day);
+    TEST_ASSERT_EQUAL_UINT8(8,  d.hour);
+    TEST_ASSERT_EQUAL_UINT8(51, d.minute);
+    TEST_ASSERT_EQUAL_UINT8(8,  d.second);
+    TEST_ASSERT_EQUAL_UINT8(3,  d.fixStatus);
+    TEST_ASSERT_EQUAL_UINT8(11, d.numSVs);
+    TEST_ASSERT_FLOAT_WITHIN(0.0001f, 23.2887f, d.longitude);
+    TEST_ASSERT_FLOAT_WITHIN(0.0001f, 42.6719f, d.latitude);
+    TEST_ASSERT_FLOAT_WITHIN(0.1f,  625.761f,   d.wgsAltitude);
+    TEST_ASSERT_FLOAT_WITHIN(0.01f, 0.126f,     d.speed);
+    TEST_ASSERT_FLOAT_WITHIN(0.1f,  0.0f,       d.heading);
+    TEST_ASSERT_EQUAL_UINT8(89, d.batteryLevel);
+    TEST_ASSERT_FALSE(d.charging);
+    TEST_ASSERT_EQUAL_INT16(-3,   d.gForceX);
+    TEST_ASSERT_EQUAL_INT16(113,  d.gForceY);
+    TEST_ASSERT_EQUAL_INT16(974,  d.gForceZ);   // ≈1G at rest ✓
+    TEST_ASSERT_EQUAL_INT16(-209, d.rotRateX);  // roll
+    TEST_ASSERT_EQUAL_INT16(86,   d.rotRateY);  // pitch
+    TEST_ASSERT_EQUAL_INT16(-4,   d.rotRateZ);  // yaw
+}
+
 // ── Runner ────────────────────────────────────────────────────────────────────
 int main() {
     UNITY_BEGIN();
@@ -230,5 +309,6 @@ int main() {
     RUN_TEST(test_wrong_class_returns_false);
     RUN_TEST(test_wrong_id_returns_false);
     RUN_TEST(test_payload_too_short_returns_false);
+    RUN_TEST(test_parse_real_packet_from_pdf);
     return UNITY_END();
 }
