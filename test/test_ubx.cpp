@@ -135,6 +135,63 @@ void test_checksum_constants() {
     TEST_ASSERT_EQUAL_HEX8(0x65, ckB);
 }
 
+// ── Edge cases ────────────────────────────────────────────────────────────────
+
+void test_first_checksum_byte_corrupt_returns_false() {
+    // Corrupt ckA (second-to-last byte) — ckB remains correct but overall fails
+    uint8_t buf[16];
+    size_t len;
+    buildDownloadTrigger(buf, len);
+    buf[len - 2] ^= 0xFF;  // flip ckA, leave ckB unchanged
+    UbxPacket pkt{};
+    TEST_ASSERT_FALSE(ubxDecode(buf, len, pkt));
+}
+
+void test_all_zeros_payload_roundtrip() {
+    UbxPacket orig{};
+    orig.cls = UBX_CLASS_RACEBOX;
+    orig.id  = UBX_ID_REC_STATUS;
+    orig.len = 4;
+    memset(orig.payload, 0, 4);
+
+    uint8_t buf[64];
+    size_t frameLen = ubxEncode(orig, buf, sizeof(buf));
+
+    UbxPacket decoded{};
+    TEST_ASSERT_TRUE(ubxDecode(buf, frameLen, decoded));
+    TEST_ASSERT_EQUAL(4, decoded.len);
+    TEST_ASSERT_EQUAL_MEMORY(orig.payload, decoded.payload, 4);
+}
+
+void test_max_payload_size_roundtrip() {
+    // UBX_MAX_PAYLOAD = 256 — verify the framing handles the largest possible payload
+    UbxPacket orig{};
+    orig.cls = UBX_CLASS_RACEBOX;
+    orig.id  = 0x01;
+    orig.len = 256;
+    for (int i = 0; i < 256; i++) orig.payload[i] = (uint8_t)i;
+
+    uint8_t buf[264 + 8];  // 256 payload + 8 overhead
+    size_t frameLen = ubxEncode(orig, buf, sizeof(buf));
+    TEST_ASSERT_EQUAL(264, (int)frameLen);
+
+    UbxPacket decoded{};
+    TEST_ASSERT_TRUE(ubxDecode(buf, frameLen, decoded));
+    TEST_ASSERT_EQUAL(256, decoded.len);
+    TEST_ASSERT_EQUAL_MEMORY(orig.payload, decoded.payload, 256);
+}
+
+void test_decode_exact_frame_length_no_extra_bytes() {
+    // Feed exactly the right number of bytes — no trailing garbage
+    uint8_t buf[64];
+    size_t len;
+    buildDownloadTrigger(buf, len);
+    UbxPacket pkt{};
+    // len is already exactly right; just verify it decodes cleanly
+    TEST_ASSERT_TRUE(ubxDecode(buf, len, pkt));
+    TEST_ASSERT_EQUAL(0, pkt.len);
+}
+
 // ── Runner ────────────────────────────────────────────────────────────────────
 int main() {
     UNITY_BEGIN();
@@ -147,5 +204,9 @@ int main() {
     RUN_TEST(test_encode_returns_zero_if_buffer_too_small);
     RUN_TEST(test_roundtrip_80_byte_payload);
     RUN_TEST(test_checksum_constants);
+    RUN_TEST(test_first_checksum_byte_corrupt_returns_false);
+    RUN_TEST(test_all_zeros_payload_roundtrip);
+    RUN_TEST(test_max_payload_size_roundtrip);
+    RUN_TEST(test_decode_exact_frame_length_no_extra_bytes);
     return UNITY_END();
 }

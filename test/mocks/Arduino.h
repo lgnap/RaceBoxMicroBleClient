@@ -1,9 +1,22 @@
 #pragma once
-// Minimal Arduino type stubs for native (host g++) compilation.
-// Provides only the types needed by the natively-tested modules
-// (ubx.h, ubx.cpp, RaceBoxParser.h, RaceBoxParser.cpp).
-// Arduino-dependent modules (RaceBoxBle, RaceBoxRecorder, RaceBoxDownloader)
-// are excluded from native CI compilation.
+// Minimal Arduino stubs for native (host g++) compilation.
+// Covers all modules: ubx, RaceBoxParser, RaceBoxRecorder, RaceBoxDownloader.
 #include <stdint.h>
 #include <stddef.h>
 #include <string.h>
+#include <stdio.h>
+#include <stdarg.h>
+
+// ── millis() — controllable fake clock ───────────────────────────────────────
+// Test files can manipulate _fakeMillis directly to simulate time passing.
+inline uint32_t _fakeMillis = 0;
+inline uint32_t millis() { return _fakeMillis; }
+
+// ── Serial stub — no-op (all log output suppressed in native tests) ───────────
+struct _FakeSerial {
+    void println(const char*) {}
+    void println(int) {}
+    template<typename... Args>
+    void printf(const char*, Args...) {}
+};
+inline _FakeSerial Serial;
