@@ -1,8 +1,12 @@
 UNITY   ?= /tmp/Unity-2.5.2/src
 CXX     := g++
 CXXFLAGS := -std=c++17 -I ../test/mocks -I ../src -I $(UNITY)
-# Exclude Arduino/BLE-dependent files (RaceBoxBle, Recorder, Downloader)
-SRC_FILES := $(filter-out ../src/RaceBoxBle.cpp ../src/RaceBoxRecorder.cpp ../src/RaceBoxDownloader.cpp, $(wildcard ../src/*.cpp))
+
+# All src/*.cpp except the real RaceBoxBle (replaced by the stub below).
+SRC_FILES := $(filter-out ../src/RaceBoxBle.cpp, $(wildcard ../src/*.cpp))
+
+# Stub replacing RaceBoxBle.cpp for native builds.
+STUB_FILES := ../test/mocks/RaceBoxBle_stub.cpp
 
 .PHONY: all test download-unity
 
@@ -18,7 +22,7 @@ test: download-unity
 	@FAIL=0; \
 	for t in test_*.cpp; do \
 	  name=$$(basename $$t .cpp); \
-	  $(CXX) $(CXXFLAGS) $(SRC_FILES) $(UNITY)/unity.c $$t -o /tmp/$$name 2>&1; \
+	  $(CXX) $(CXXFLAGS) $(SRC_FILES) $(STUB_FILES) $(UNITY)/unity.c $$t -o /tmp/$$name 2>&1; \
 	  echo "=== $$name ==="; \
 	  /tmp/$$name || FAIL=$$((FAIL + 1)); \
 	done; \

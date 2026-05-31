@@ -289,6 +289,98 @@ void test_parse_real_packet_from_pdf() {
     TEST_ASSERT_EQUAL_INT16(-4,   d.rotRateZ);  // yaw
 }
 
+// ── Edge cases ────────────────────────────────────────────────────────────────
+
+void test_negative_longitude_western_hemisphere() {
+    // New York: lon ≈ -74.006° (west of prime meridian → negative)
+    UbxPacket pkt = makeLivePacket();
+    writeI32(pkt.payload, 24, static_cast<int32_t>(-74.006f * 1e7f));
+    RaceBoxData d{};
+    TEST_ASSERT_TRUE(raceBoxParse(pkt, d));
+    TEST_ASSERT_FLOAT_WITHIN(0.001f, -74.006f, d.longitude);
+}
+
+void test_negative_latitude_southern_hemisphere() {
+    // Sydney: lat ≈ -33.869° (south → negative)
+    UbxPacket pkt = makeLivePacket();
+    writeI32(pkt.payload, 28, static_cast<int32_t>(-33.869f * 1e7f));
+    RaceBoxData d{};
+    TEST_ASSERT_TRUE(raceBoxParse(pkt, d));
+    TEST_ASSERT_FLOAT_WITHIN(0.001f, -33.869f, d.latitude);
+}
+
+void test_zero_speed() {
+    UbxPacket pkt = makeLivePacket();
+    writeU32(pkt.payload, 48, 0u);  // 0 mm/s
+    RaceBoxData d{};
+    raceBoxParse(pkt, d);
+    TEST_ASSERT_FLOAT_WITHIN(0.001f, 0.0f, d.speed);
+}
+
+void test_fix_status_2d() {
+    UbxPacket pkt = makeLivePacket();
+    pkt.payload[20] = 2;  // 2D fix
+    RaceBoxData d{};
+    raceBoxParse(pkt, d);
+    TEST_ASSERT_EQUAL(2, d.fixStatus);
+}
+
+void test_fix_status_no_fix() {
+    UbxPacket pkt = makeLivePacket();
+    pkt.payload[20] = 0;  // no fix
+    RaceBoxData d{};
+    raceBoxParse(pkt, d);
+    TEST_ASSERT_EQUAL(0, d.fixStatus);
+}
+
+void test_battery_zero_percent() {
+    UbxPacket pkt = makeLivePacket();
+    pkt.payload[67] = 0x00;  // 0%, not charging
+    RaceBoxData d{};
+    raceBoxParse(pkt, d);
+    TEST_ASSERT_EQUAL(0, d.batteryLevel);
+    TEST_ASSERT_FALSE(d.charging);
+}
+
+void test_battery_full_and_charging() {
+    UbxPacket pkt = makeLivePacket();
+    pkt.payload[67] = 0x80 | 100;  // 100% + charging bit
+    RaceBoxData d{};
+    raceBoxParse(pkt, d);
+    TEST_ASSERT_EQUAL(100, d.batteryLevel);
+    TEST_ASSERT_TRUE(d.charging);
+}
+
+void test_max_positive_rotation_rate() {
+    UbxPacket pkt = makeLivePacket();
+    writeI16(pkt.payload, 74, 32767);  // INT16_MAX
+    RaceBoxData d{};
+    raceBoxParse(pkt, d);
+    TEST_ASSERT_EQUAL_INT16(32767, d.rotRateX);
+}
+
+void test_max_negative_rotation_rate() {
+    UbxPacket pkt = makeLivePacket();
+    writeI16(pkt.payload, 74, -32768);  // INT16_MIN
+    RaceBoxData d{};
+    raceBoxParse(pkt, d);
+    TEST_ASSERT_EQUAL_INT16(-32768, d.rotRateX);
+}
+
+void test_payload_exactly_80_bytes_accepted() {
+    UbxPacket pkt = makeLivePacket();
+    pkt.len = 80;  // minimum valid size
+    RaceBoxData d{};
+    TEST_ASSERT_TRUE(raceBoxParse(pkt, d));
+}
+
+void test_payload_79_bytes_rejected() {
+    UbxPacket pkt = makeLivePacket();
+    pkt.len = 79;  // one byte below minimum
+    RaceBoxData d{};
+    TEST_ASSERT_FALSE(raceBoxParse(pkt, d));
+}
+
 // ── Runner ────────────────────────────────────────────────────────────────────
 int main() {
     UNITY_BEGIN();
@@ -310,5 +402,16 @@ int main() {
     RUN_TEST(test_wrong_id_returns_false);
     RUN_TEST(test_payload_too_short_returns_false);
     RUN_TEST(test_parse_real_packet_from_pdf);
+    RUN_TEST(test_negative_longitude_western_hemisphere);
+    RUN_TEST(test_negative_latitude_southern_hemisphere);
+    RUN_TEST(test_zero_speed);
+    RUN_TEST(test_fix_status_2d);
+    RUN_TEST(test_fix_status_no_fix);
+    RUN_TEST(test_battery_zero_percent);
+    RUN_TEST(test_battery_full_and_charging);
+    RUN_TEST(test_max_positive_rotation_rate);
+    RUN_TEST(test_max_negative_rotation_rate);
+    RUN_TEST(test_payload_exactly_80_bytes_accepted);
+    RUN_TEST(test_payload_79_bytes_rejected);
     return UNITY_END();
 }
