@@ -20,9 +20,7 @@ void stubBleReset() {
 
 // ── RaceBoxBle method stubs ───────────────────────────────────────────────────
 
-RaceBoxBle::RaceBoxBle(RaceBoxLiveCallback cb) : _liveCb(std::move(cb)) {
-    _fifoMutex = nullptr;
-}
+RaceBoxBle::RaceBoxBle(RaceBoxLiveCallback cb) : _liveCb(std::move(cb)) {}
 
 bool RaceBoxBle::sendCommand(const UbxPacket& pkt) {
     g_stubLastSent = pkt;
@@ -33,6 +31,8 @@ bool RaceBoxBle::sendCommand(const UbxPacket& pkt) {
 void RaceBoxBle::begin()   {}
 void RaceBoxBle::update()  {}
 
+void RaceBoxBle::_debug(const char*, ...) {}
+
 // NimBLE bridge stubs — not used in unit tests
 RaceBoxBle* RaceBoxBle::_instance = nullptr;
 void RaceBoxBle::_handleNotification(const uint8_t*, size_t) {}
@@ -40,8 +40,5 @@ void RaceBoxBle::_handleConnect()    {}
 void RaceBoxBle::_handleDisconnect() {}
 void RaceBoxBle::_handleScanResult(const char*, const char*, uint8_t) {}
 
-// FIFO stubs — not exercised in unit tests
-void RaceBoxBle::_fifoPush(const uint8_t*, size_t) {}
-bool RaceBoxBle::_fifoPeek(uint8_t*, size_t) const { return false; }
-void RaceBoxBle::_fifoDrop(size_t) {}
+// FIFO drain stub — not exercised by Recorder/Downloader unit tests
 void RaceBoxBle::_drainFifo() {}

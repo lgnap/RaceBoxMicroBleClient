@@ -5,20 +5,12 @@
 #include <functional>
 #include "ubx.h"
 #include "RaceBoxData.h"
-#include "freertos/FreeRTOS.h"
-#include "freertos/semphr.h"
+#include "RaceBoxFifo.h"
 
 // ── BLE UUIDs (Nordic UART Service, used by RaceBox devices) ─────────────────
 static const char* RACEBOX_SERVICE_UUID = "6E400001-B5A3-F393-E0A9-E50E24DCCA9E";
 static const char* RACEBOX_RX_UUID      = "6E400002-B5A3-F393-E0A9-E50E24DCCA9E";  // client → device
 static const char* RACEBOX_TX_UUID      = "6E400003-B5A3-F393-E0A9-E50E24DCCA9E";  // device → client
-
-// FIFO size — enough for a burst of history records during download.
-// A full BLE notification is 244 bytes (~2-3 records of 88 bytes each).
-// The device sends at full BLE throughput (~100 kbps) during download.
-// 4096 bytes ≈ 46 records of headroom; covers ~320 ms at full download speed
-// with a fast callback. Increase if your callback blocks (e.g. SD writes > 300ms).
-static constexpr size_t RACEBOX_FIFO_SIZE = 4096;
 
 // ── Callbacks ─────────────────────────────────────────────────────────────────
 // Called with each parsed live-data record (0xFF/0x01).
@@ -37,14 +29,22 @@ using RaceBoxPacketCallback = std::function<void(const UbxPacket&)>;
  *   - All other packets     → RaceBoxPacketCallback (for Downloader / Recorder)
  *
  * Multiple records may arrive in a single BLE notification (MTU ~244 bytes).
- * A FIFO ring-buffer accumulates raw bytes between calls to update() and
- * extracts complete UBX frames one at a time.
+ * A RaceBoxFifo ring-buffer accumulates raw bytes between calls to update()
+ * and extracts complete UBX frames one at a time.
  *
  * Usage:
  *   RaceBoxBle ble(onLiveData);
+ *   ble.setDebugCallback([](const char* msg){ Serial.println(msg); }); // optional
  *   ble.setPacketCallback(onPacket);  // optional
  *   ble.begin();
  *   loop: ble.update();
+ *
+ * ── RaceBoxRecorder / RaceBoxDownloader coexistence ───────────────────────────
+ * Both Recorder and Downloader register themselves via setPacketCallback().
+ * Only ONE can be active at a time — calling begin() on the second silently
+ * replaces the first callback. To switch between them at runtime, call begin()
+ * again on the module you want to activate. See LibTest for a reference
+ * implementation that toggles between recorder and downloader mode.
  */
 class RaceBoxBle {
 public:
@@ -58,25 +58,48 @@ public:
 
     bool isConnected() const { return _connected; }
 
+    // ── Packet routing ────────────────────────────────────────────────────────
+
     // Set callback for non-live packets (Recorder / Downloader use this).
-    void setPacketCallback(RaceBoxPacketCallback cb) { _packetCb = std::move(cb); }
+    //
+    // ⚠ Only one callback can be active at a time. Calling this a second time
+    // (e.g. switching from Recorder to Downloader) replaces the previous
+    // callback. A debug warning is emitted if a debug callback is set.
+    void setPacketCallback(RaceBoxPacketCallback cb) {
+        if (_packetCb && cb && _debugCb)
+            _debugCb("[BLE] WARNING: overwriting existing packet callback — "
+                     "only one of RaceBoxRecorder/RaceBoxDownloader can be active at a time");
+        _packetCb = std::move(cb);
+    }
 
     // Optional sniffer: fires for EVERY parsed UBX packet (live + non-live),
     // before the normal callbacks. Useful for protocol debugging.
-    // Set to nullptr to disable.
     void setSniffCallback(RaceBoxPacketCallback cb) { _sniffCb = std::move(cb); }
 
-    // Optional callback invoked when the FIFO overflows (oldest bytes dropped).
-    // The argument is the cumulative dropped-byte count since begin().
-    // Default: no callback (silent overflow — same behaviour as before).
-    //
-    // ⚠ Callback context: invoked from the NimBLE task, not from update().
-    // Keep it short (e.g. set a flag). Do NOT call sendCommand() or any
-    // other RaceBoxBle method from within this callback.
-    void setOverflowCallback(std::function<void(uint32_t)> cb) { _overflowCb = std::move(cb); }
+    // ── Debug / diagnostics ───────────────────────────────────────────────────
 
-    // Total number of bytes dropped due to FIFO overflow since begin().
-    uint32_t fifoOverflowCount() const { return _fifoOverflowCount; }
+    // Optional debug log callback. Receives a null-terminated string for each
+    // internal event (connect, disconnect, scan, errors). Default: silent.
+    // Replaces all Serial.println() calls — wire to Serial if you want output:
+    //   ble.setDebugCallback([](const char* msg){ Serial.println(msg); });
+    void setDebugCallback(std::function<void(const char*)> cb) { _debugCb = std::move(cb); }
+
+    // Optional: called when the FIFO overflows (oldest bytes dropped).
+    // ⚠ Invoked from the NimBLE task — keep it short and don't call
+    // sendCommand() or other RaceBoxBle methods from within this callback.
+    void setOverflowCallback(std::function<void(uint32_t)> cb) {
+        _fifo.setOverflowCallback(std::move(cb));
+    }
+
+    // Total bytes dropped due to FIFO overflow since begin().
+    uint32_t fifoOverflowCount() const { return _fifo.overflowCount(); }
+
+    // Optional: called when a UBX frame fails checksum / framing validation.
+    // Argument is the cumulative error count since begin().
+    void setErrorCallback(std::function<void(uint32_t)> cb) { _errorCb = std::move(cb); }
+
+    // Cumulative UBX decode errors since begin() (bad checksum, truncated frames).
+    uint32_t decodeErrorCount() const { return _decodeErrorCount; }
 
     // Encode `pkt` as a UBX frame and write it to the RX characteristic.
     // Returns false if not connected or the characteristic is unavailable.
@@ -93,32 +116,22 @@ private:
     RaceBoxLiveCallback   _liveCb;
     RaceBoxPacketCallback _packetCb;
     RaceBoxPacketCallback _sniffCb;
-    std::function<void(uint32_t)> _overflowCb;
-    uint32_t _fifoOverflowCount = 0;
+    std::function<void(const char*)> _debugCb;
+    std::function<void(uint32_t)>    _errorCb;
+    uint32_t _decodeErrorCount = 0;
 
     bool _connected = false;
     bool _doConnect = false;
     bool _doScan    = false;
 
-    // ── FIFO ring buffer ──────────────────────────────────────────────────────
-    // _fifoMutex protects all FIFO members. _fifoPush() is called from the
-    // NimBLE task; _drainFifo() is called from the Arduino main loop via
-    // update(). Both acquire the mutex before touching the FIFO.
-    SemaphoreHandle_t _fifoMutex = nullptr;
+    RaceBoxFifo _fifo;
 
-    uint8_t _fifo[RACEBOX_FIFO_SIZE];
-    size_t  _fifoHead = 0;  // write index
-    size_t  _fifoTail = 0;  // read index
-    size_t  _fifoLen  = 0;
-
-    void   _fifoPush(const uint8_t* data, size_t len);
-    bool   _fifoPeek(uint8_t* out, size_t len) const;
-    void   _fifoDrop(size_t len);
-    size_t _fifoAvail() const { return _fifoLen; }
+    // NimBLE RX characteristic handle (kept for sendCommand)
+    void* _rxChar = nullptr;  // NimBLERemoteCharacteristic*
 
     // Drain the FIFO: extract and dispatch complete UBX frames.
     void _drainFifo();
 
-    // NimBLE RX characteristic handle (kept for sendCommand)
-    void* _rxChar = nullptr;  // NimBLERemoteCharacteristic*
+    // Internal debug helper — formats and forwards to _debugCb if set.
+    void _debug(const char* fmt, ...);
 };
