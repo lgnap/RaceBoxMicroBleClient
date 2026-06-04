@@ -5,6 +5,7 @@
  * commands at 115200 baud.  Flash to any ESP32 board with built-in BLE.
  *
  * ── Commands ─────────────────────────────────────────────────────────────────
+ *   UNLOCK             Send 0xFF/0x30 MEM_UNLOCK (try before REC START if NACK)
  *   STATUS             Query recording status (state + record count)
  *   REC START [hz]     Start standalone recording (hz = 5|10|25, default 25)
  *   REC STOP           Stop standalone recording
@@ -135,6 +136,21 @@ static void dispatch(const char* line) {
         Serial.printf("FIFO overflow: %lu bytes dropped\n",
                       (unsigned long)racebox.fifoOverflowCount());
 
+    } else if (strcmp(line, "UNLOCK") == 0) {
+        // Send 0xFF/0x30 (MEM_UNLOCK) with empty payload.
+        // The RaceBox may require this before accepting REC START.
+        // If it ACKs, try REC START again. If it NACKs, a key/PIN may be needed.
+        if (!racebox.isConnected()) { Serial.println("ERROR not connected"); return; }
+        UbxPacket pkt{};
+        pkt.cls = 0xFF;
+        pkt.id  = 0x30;  // UBX_ID_MEM_UNLOCK
+        pkt.len = 0;
+        if (racebox.sendCommand(pkt)) {
+            Serial.println("UNLOCK sent (0xFF/0x30) — watching for ACK/NACK...");
+        } else {
+            Serial.println("ERROR: sendCommand failed");
+        }
+
     } else if (strcmp(line, "STATUS") == 0) {
         if (!racebox.isConnected()) { Serial.println("ERROR not connected"); return; }
         if (_downloadMode) activateRecorder();
@@ -173,7 +189,7 @@ static void dispatch(const char* line) {
 
     } else {
         Serial.printf("ERROR unknown command: %s\n", line);
-        Serial.println("Commands: PING  LIVE  RAWDUMP  FIFO  STATUS  REC START [hz]  REC STOP  DOWNLOAD");
+        Serial.println("Commands: PING  LIVE  RAWDUMP  FIFO  UNLOCK  STATUS  REC START [hz]  REC STOP  DOWNLOAD");
     }
 }
 
@@ -182,7 +198,7 @@ void setup() {
     Serial.begin(115200);
     delay(500);
     Serial.println("=== RaceBoxMicroBleClient LibTest ===");
-    Serial.println("Commands: PING  LIVE  RAWDUMP  FIFO  STATUS  REC START [hz]  REC STOP  DOWNLOAD");
+    Serial.println("Commands: PING  LIVE  RAWDUMP  FIFO  UNLOCK  STATUS  REC START [hz]  REC STOP  DOWNLOAD");
 
     racebox.setOverflowCallback([](uint32_t dropped) {
         Serial.printf("[WARN] FIFO overflow — %lu bytes dropped (total)\n", (unsigned long)dropped);
