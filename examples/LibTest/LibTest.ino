@@ -5,7 +5,8 @@
  * commands at 115200 baud.  Flash to any ESP32 board with built-in BLE.
  *
  * ── Commands ─────────────────────────────────────────────────────────────────
- *   UNLOCK             Send 0xFF/0x30 MEM_UNLOCK (try before REC START if NACK)
+ *   UNLOCK [code]      Unlock memory (REQUIRED before REC START, resets on reconnect)
+ *                     Default code: 123456. Find your device code in RaceBox app settings.
  *   STATUS             Query recording status (state + record count)
  *   REC START [hz]     Start standalone recording (hz = 5|10|25, default 25)
  *   REC STOP           Stop standalone recording
@@ -136,17 +137,15 @@ static void dispatch(const char* line) {
         Serial.printf("FIFO overflow: %lu bytes dropped\n",
                       (unsigned long)racebox.fifoOverflowCount());
 
-    } else if (strcmp(line, "UNLOCK") == 0) {
-        // Send 0xFF/0x30 (MEM_UNLOCK) with empty payload.
-        // The RaceBox may require this before accepting REC START.
-        // If it ACKs, try REC START again. If it NACKs, a key/PIN may be needed.
+    } else if (strncmp(line, "UNLOCK", 6) == 0) {
+        // Send 0xFF/0x30 MEM_UNLOCK — required before any recording command.
+        // The memory lock resets on every new BLE connection.
+        // Usage: UNLOCK [code]  (default code: 123456)
         if (!racebox.isConnected()) { Serial.println("ERROR not connected"); return; }
-        UbxPacket pkt{};
-        pkt.cls = 0xFF;
-        pkt.id  = 0x30;  // UBX_ID_MEM_UNLOCK
-        pkt.len = 0;
-        if (racebox.sendCommand(pkt)) {
-            Serial.println("UNLOCK sent (0xFF/0x30) — watching for ACK/NACK...");
+        uint32_t code = 123456;
+        if (line[6] == ' ') sscanf(line + 7, "%lu", (unsigned long*)&code);
+        if (rec.unlockMemory(code)) {
+            Serial.printf("UNLOCK sent (code=%lu) — watching for ACK/NACK...\n", (unsigned long)code);
         } else {
             Serial.println("ERROR: sendCommand failed");
         }

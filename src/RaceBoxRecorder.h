@@ -64,6 +64,14 @@ public:
 
     // ── Commands (async — result via callbacks / state flags) ────────────────
 
+    // Send 0xFF/0x30 to unlock memory before issuing any recording command.
+    // REQUIRED on every new BLE connection — the lock resets on disconnect.
+    // securityCode: the preset code configured on the device (default 123456).
+    // Returns false if BLE is not connected.
+    // The device replies ACK (0xFF/0x02) on success, NACK (0xFF/0x03) on wrong code.
+    // After several failed attempts the device may disconnect.
+    bool unlockMemory(uint32_t securityCode = 123456);
+
     // Send 0xFF/0x22 to query recording status and record count.
     // Results available after the device replies (check state/recordCount).
     void queryStatus();

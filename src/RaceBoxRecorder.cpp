@@ -26,6 +26,24 @@ void RaceBoxRecorder::update() {
     }
 }
 
+// ── unlockMemory() ────────────────────────────────────────────────────────────
+bool RaceBoxRecorder::unlockMemory(uint32_t securityCode) {
+    UbxPacket pkt{};
+    pkt.cls    = UBX_CLASS_RACEBOX;
+    pkt.id     = UBX_ID_MEM_UNLOCK;  // 0x30
+    pkt.len    = 4;
+    pkt.payload[0] = (uint8_t)(securityCode & 0xFF);
+    pkt.payload[1] = (uint8_t)((securityCode >> 8)  & 0xFF);
+    pkt.payload[2] = (uint8_t)((securityCode >> 16) & 0xFF);
+    pkt.payload[3] = (uint8_t)((securityCode >> 24) & 0xFF);
+    if (_ble.sendCommand(pkt)) {
+        _cmdSentMs = millis();
+        Serial.printf("[Recorder] Unlock sent: code=%lu\n", (unsigned long)securityCode);
+        return true;
+    }
+    return false;
+}
+
 // ── queryStatus() ─────────────────────────────────────────────────────────────
 void RaceBoxRecorder::queryStatus() {
     UbxPacket pkt{};
