@@ -79,22 +79,32 @@ static uint32_t      _benchRecLastStatusMs = 0; // millis() of last STATUS query
 static constexpr uint32_t BENCH_STATUS_INTERVAL_MS = 5000;  // query STATUS every 5s during recording
 
 // ── Live data cache ───────────────────────────────────────────────────────────
-static int8_t _lastBatteryLevel = -1;  // -1 = not yet received
+static int16_t _lastBatteryRaw = -1;  // -1 = not yet received
+// RaceBox Micro sends input voltage × 10 (e.g. 126 → 12.6 V).
+// RaceBox Mini S sends battery level 0–100 %.
+// Heuristic: if raw > 100, it's a voltage reading (Micro behaviour).
+static void printBattery(uint8_t raw) {
+    if (raw > 100)
+        Serial.printf("%.1fV", raw / 10.0f);
+    else
+        Serial.printf("%d%%", (int)raw);
+}
 
 // ── Live data callback ────────────────────────────────────────────────────────
 static void onLiveData(const RaceBoxData& d) {
-    _lastBatteryLevel = d.batteryLevel;
+    _lastBatteryRaw = d.batteryLevel;
     if (!_liveEnabled) return;
     Serial.printf(
         "[LIVE] fix=%d svs=%d | lat=%.7f lon=%.7f alt=%.1fm | "
         "spd=%.1fkm/h hdg=%.1f | "
-        "gX=%+5d gY=%+5d gZ=%+5d mG | rZ=%+6d (0.01deg/s) | batt=%d%%\n",
+        "gX=%+5d gY=%+5d gZ=%+5d mG | rZ=%+6d (0.01deg/s) | batt=",
         d.fixStatus, d.numSVs,
         d.latitude, d.longitude, d.altitude,
         d.speed, d.heading,
         d.gForceX, d.gForceY, d.gForceZ,
-        d.rotRateZ,
-        d.batteryLevel);
+        d.rotRateZ);
+    printBattery(d.batteryLevel);
+    Serial.println();
 }
 
 // ── BLE client ───────────────────────────────────────────────────────────────
@@ -334,14 +344,14 @@ void loop() {
         if (remaining != lastCountdown) {
             lastCountdown = remaining;
             if (remaining > 0) {
-                if (_lastBatteryLevel >= 0)
-                    Serial.printf("[RECBENCH] Session %u/%u — %lu s remaining | batt=%d%%\n",
-                                  _benchRecSession + 1, BENCH_SESSION_COUNT,
-                                  (unsigned long)remaining, (int)_lastBatteryLevel);
-                else
-                    Serial.printf("[RECBENCH] Session %u/%u — %lu s remaining\n",
-                                  _benchRecSession + 1, BENCH_SESSION_COUNT,
-                                  (unsigned long)remaining);
+                Serial.printf("[RECBENCH] Session %u/%u — %lu s remaining",
+                              _benchRecSession + 1, BENCH_SESSION_COUNT,
+                              (unsigned long)remaining);
+                if (_lastBatteryRaw >= 0) {
+                    Serial.print(" | batt=");
+                    printBattery((uint8_t)_lastBatteryRaw);
+                }
+                Serial.println();
             }
         }
         // Periodic STATUS query to keep rec.recordCount() up to date
