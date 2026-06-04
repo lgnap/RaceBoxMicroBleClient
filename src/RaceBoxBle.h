@@ -57,6 +57,11 @@ public:
     // Set callback for non-live packets (Recorder / Downloader use this).
     void setPacketCallback(RaceBoxPacketCallback cb) { _packetCb = std::move(cb); }
 
+    // Optional sniffer: fires for EVERY parsed UBX packet (live + non-live),
+    // before the normal callbacks. Useful for protocol debugging.
+    // Set to nullptr to disable.
+    void setSniffCallback(RaceBoxPacketCallback cb) { _sniffCb = std::move(cb); }
+
     // Optional callback invoked when the FIFO overflows (oldest bytes dropped).
     // The argument is the cumulative dropped-byte count since begin().
     // Default: no callback (silent overflow — same behaviour as before).
@@ -83,6 +88,7 @@ public:
 private:
     RaceBoxLiveCallback   _liveCb;
     RaceBoxPacketCallback _packetCb;
+    RaceBoxPacketCallback _sniffCb;
     std::function<void(uint32_t)> _overflowCb;
     uint32_t _fifoOverflowCount = 0;
 

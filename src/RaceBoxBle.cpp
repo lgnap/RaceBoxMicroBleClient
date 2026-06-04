@@ -234,6 +234,8 @@ void RaceBoxBle::_drainFifo() {
         UbxPacket pkt{};
         if (!ubxDecode(frame, frameLen, pkt)) continue;
 
+        if (_sniffCb) _sniffCb(pkt);  // sniffer fires first, for all packets
+
         if (pkt.cls == UBX_CLASS_RACEBOX && pkt.id == UBX_ID_LIVE) {
             if (_liveCb) {
                 RaceBoxData d{};

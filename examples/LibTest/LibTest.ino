@@ -6,10 +6,11 @@
  *
  * ── Commands ─────────────────────────────────────────────────────────────────
  *   STATUS             Query recording status (state + record count)
- *   REC START [hz]     Start standalone recording (hz = 1|5|10|25, default 25)
+ *   REC START [hz]     Start standalone recording (hz = 5|10|25, default 25)
  *   REC STOP           Stop standalone recording
  *   DOWNLOAD           Download stored history (switches to downloader mode)
  *   LIVE               Toggle live data printing ON/OFF
+ *   RAWDUMP            Toggle raw UBX packet hex dump (protocol debugging)
  *   FIFO               Print FIFO overflow count
  *   PING               Print BLE connection status
  *
@@ -84,6 +85,17 @@ RaceBoxDownloader dl(racebox, [](const RaceBoxData& d, uint32_t index) {
                   d.latitude, d.longitude, d.speed);
 });
 
+// ── Raw packet debug dump ─────────────────────────────────────────────────────
+static bool _rawDump = false;  // toggled with RAWDUMP command
+
+static void dumpPacket(const char* tag, const UbxPacket& pkt) {
+    Serial.printf("[RAW %s] cls=0x%02X id=0x%02X len=%u payload:",
+                  tag, pkt.cls, pkt.id, pkt.len);
+    for (uint16_t i = 0; i < pkt.len && i < 32; i++)
+        Serial.printf(" %02X", pkt.payload[i]);
+    Serial.println();
+}
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 static const char* recStateStr(RecordingState s) {
@@ -109,6 +121,15 @@ static void dispatch(const char* line) {
     } else if (strcmp(line, "LIVE") == 0) {
         _liveEnabled = !_liveEnabled;
         Serial.printf("LIVE %s\n", _liveEnabled ? "ON" : "OFF");
+
+    } else if (strcmp(line, "RAWDUMP") == 0) {
+        _rawDump = !_rawDump;
+        if (_rawDump) {
+            racebox.setSniffCallback([](const UbxPacket& pkt) { dumpPacket("RX", pkt); });
+        } else {
+            racebox.setSniffCallback(nullptr);
+        }
+        Serial.printf("RAWDUMP %s\n", _rawDump ? "ON (all UBX packets hex-dumped)" : "OFF");
 
     } else if (strcmp(line, "FIFO") == 0) {
         Serial.printf("FIFO overflow: %lu bytes dropped\n",
@@ -152,7 +173,7 @@ static void dispatch(const char* line) {
 
     } else {
         Serial.printf("ERROR unknown command: %s\n", line);
-        Serial.println("Commands: PING  LIVE  FIFO  STATUS  REC START [hz]  REC STOP  DOWNLOAD");
+        Serial.println("Commands: PING  LIVE  RAWDUMP  FIFO  STATUS  REC START [hz]  REC STOP  DOWNLOAD");
     }
 }
 
@@ -161,7 +182,7 @@ void setup() {
     Serial.begin(115200);
     delay(500);
     Serial.println("=== RaceBoxMicroBleClient LibTest ===");
-    Serial.println("Commands: PING  LIVE  FIFO  STATUS  REC START [hz]  REC STOP  DOWNLOAD");
+    Serial.println("Commands: PING  LIVE  RAWDUMP  FIFO  STATUS  REC START [hz]  REC STOP  DOWNLOAD");
 
     racebox.setOverflowCallback([](uint32_t dropped) {
         Serial.printf("[WARN] FIFO overflow — %lu bytes dropped (total)\n", (unsigned long)dropped);
