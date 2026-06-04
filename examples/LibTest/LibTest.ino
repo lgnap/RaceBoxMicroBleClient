@@ -78,8 +78,12 @@ static uint32_t      _benchRecordsAtSessionStart = 0;  // record count at sessio
 static uint32_t      _benchRecLastStatusMs = 0; // millis() of last STATUS query during RECBENCH
 static constexpr uint32_t BENCH_STATUS_INTERVAL_MS = 5000;  // query STATUS every 5s during recording
 
+// ── Live data cache ───────────────────────────────────────────────────────────
+static int8_t _lastBatteryLevel = -1;  // -1 = not yet received
+
 // ── Live data callback ────────────────────────────────────────────────────────
 static void onLiveData(const RaceBoxData& d) {
+    _lastBatteryLevel = d.batteryLevel;
     if (!_liveEnabled) return;
     Serial.printf(
         "[LIVE] fix=%d svs=%d | lat=%.7f lon=%.7f alt=%.1fm | "
@@ -329,10 +333,16 @@ void loop() {
         uint32_t remaining = (elapsed < durMs) ? (durMs - elapsed) / 1000 : 0;
         if (remaining != lastCountdown) {
             lastCountdown = remaining;
-            if (remaining > 0)
-                Serial.printf("[RECBENCH] Session %u/%u — %lu s remaining\n",
-                              _benchRecSession + 1, BENCH_SESSION_COUNT,
-                              (unsigned long)remaining);
+            if (remaining > 0) {
+                if (_lastBatteryLevel >= 0)
+                    Serial.printf("[RECBENCH] Session %u/%u — %lu s remaining | batt=%d%%\n",
+                                  _benchRecSession + 1, BENCH_SESSION_COUNT,
+                                  (unsigned long)remaining, (int)_lastBatteryLevel);
+                else
+                    Serial.printf("[RECBENCH] Session %u/%u — %lu s remaining\n",
+                                  _benchRecSession + 1, BENCH_SESSION_COUNT,
+                                  (unsigned long)remaining);
+            }
         }
         // Periodic STATUS query to keep rec.recordCount() up to date
         if (millis() - _benchRecLastStatusMs >= BENCH_STATUS_INTERVAL_MS) {
