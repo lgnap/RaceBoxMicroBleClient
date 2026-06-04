@@ -29,20 +29,40 @@ static uint32_t _benchStartMs  = 0;
 static uint32_t _benchRecords  = 0;   // records received by callback
 static bool     _benchRunning  = false;
 static bool     _benchDone     = false;
-// Optional: accumulate a simple checksum to prove records are processed, not skipped
 static uint32_t _benchChecksum = 0;
+
+// ── Session tracking ──────────────────────────────────────────────────────────
+static uint32_t _sessionCount      = 0;   // number of STATE_CHANGE(start) seen
+static uint32_t _sessionRecordBase = 0;   // record index at last session start
 
 // ── BLE client ────────────────────────────────────────────────────────────────
 RaceBoxBle racebox;  // no live callback needed
 
 // ── Downloader ────────────────────────────────────────────────────────────────
-// The callback does the minimum work possible: count + lightweight checksum.
-// No Serial.printf — that's the whole point of this benchmark.
+// Record callback: count + lightweight checksum. No Serial.printf per record.
 RaceBoxDownloader dl(racebox, [](const RaceBoxData& d, uint32_t index) {
     _benchRecords++;
-    // Lightweight checksum: XOR of speed values (proves we're reading real data)
     _benchChecksum ^= (uint32_t)(d.speed * 1000);
 });
+// State Change callback: fires for each 0xFF/0x26 session boundary.
+// Serial.printf here is safe — state changes are rare (one per session start/stop).
+static void onSessionChange(uint8_t state) {
+    const char* label = (state == 1) ? "START" : (state == 2) ? "PAUSE" : "STOP";
+    if (state == 1) {
+        _sessionCount++;
+        _sessionRecordBase = _benchRecords;
+        Serial.printf("[SESSION #%lu] %s at record %lu\n",
+                      (unsigned long)_sessionCount,
+                      label,
+                      (unsigned long)_benchRecords);
+    } else {
+        uint32_t sessionLen = _benchRecords - _sessionRecordBase;
+        Serial.printf("[SESSION #%lu] %s — %lu records in this session\n",
+                      (unsigned long)_sessionCount,
+                      label,
+                      (unsigned long)sessionLen);
+    }
+}
 
 // ── Command dispatcher ────────────────────────────────────────────────────────
 static void dispatch(const char* line) {
@@ -57,12 +77,15 @@ static void dispatch(const char* line) {
         if (!racebox.isConnected()) { Serial.println("ERROR not connected"); return; }
         if (_benchRunning) { Serial.println("ERROR benchmark already running"); return; }
 
-        _benchRecords  = 0;
-        _benchChecksum = 0;
-        _benchDone     = false;
-        _benchRunning  = true;
-        _benchStartMs  = millis();
+        _benchRecords       = 0;
+        _benchChecksum      = 0;
+        _sessionCount       = 0;
+        _sessionRecordBase  = 0;
+        _benchDone          = false;
+        _benchRunning       = true;
+        _benchStartMs       = millis();
 
+        dl.setStateChangeCallback(onSessionChange);
         dl.begin();
         Serial.printf("DOWNLOAD started — FIFO overflow before: %lu bytes\n",
                       (unsigned long)racebox.fifoOverflowCount());
@@ -126,6 +149,7 @@ void loop() {
                 Serial.printf("Records received : %lu / %lu expected\n",
                               (unsigned long)_benchRecords,
                               (unsigned long)dl.expectedCount());
+                Serial.printf("Sessions found   : %lu\n", (unsigned long)_sessionCount);
                 Serial.printf("Time elapsed     : %lu ms\n", (unsigned long)elapsed);
                 Serial.printf("Throughput       : %lu rec/s\n", (unsigned long)rate);
                 Serial.printf("FIFO overflow    : %lu bytes dropped\n", (unsigned long)overflow);
