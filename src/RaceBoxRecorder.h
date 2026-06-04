@@ -84,9 +84,9 @@ public:
     void queryStatus();
 
     // Send 0xFF/0x25 to start recording (preceded by auto-unlock if code is set).
-    // stationaryFilter: suppress points when device is stationary
-    // noFixFilter:      suppress points when there is no GPS fix
-    // autoShutdownMin:  0 = disabled; otherwise shut down after N minutes
+    // stationaryFilter: suppress points when stationary (speed < 1389 mm/s for 30s)
+    // noFixFilter:      suppress points when GPS fix lost for 30s
+    // autoShutdownMin:  0 = disabled; otherwise shut down after N minutes of inactivity
     void startRecording(DataRate rate = DataRate::HZ_25,
                         bool stationaryFilter = false,
                         bool noFixFilter = false,
@@ -96,9 +96,16 @@ public:
     void stopRecording();
 
     // ── State (updated asynchronously on receipt of device responses) ─────────
+    // state():       current recording state (from 0xFF/0x22 STATUS or 0xFF/0x26 STATE CHANGE)
+    // memoryLevel(): memory usage in percent 0..100 (from 0xFF/0x22 STATUS)
+    // recordCount(): number of stored records (from 0xFF/0x22 STATUS)
+    // dataRate():    last known recording data rate (from 0xFF/0x26 STATE CHANGE)
+    // lastAck():     true=last command ACKed, false=NACKed or timeout
     RecordingState state()       const { return _state; }
-    DataRate       dataRate()    const { return _dataRate; }
+    uint8_t        memoryLevel() const { return _memoryLevel; }
     uint32_t       recordCount() const { return _recordCount; }
+    uint32_t       memorySize()  const { return _memorySize; }
+    DataRate       dataRate()    const { return _dataRate; }
     bool           lastAck()     const { return _lastAck; }  // true=ACK, false=NACK
 
     // Optional: called when a 0xFF/0x26 State Change arrives (during download)
@@ -113,8 +120,10 @@ private:
 
     RaceBoxBle&         _ble;
     RecordingState      _state       = RecordingState::UNKNOWN;
-    DataRate            _dataRate    = DataRate::HZ_25;
-    uint32_t            _recordCount = 0;
+    uint8_t             _memoryLevel = 0;     // memory usage % (from STATUS)
+    uint32_t            _recordCount = 0;     // stored records (from STATUS)
+    uint32_t            _memorySize  = 0;     // total capacity in records (from STATUS)
+    DataRate            _dataRate    = DataRate::HZ_25;  // from STATE CHANGE
     bool                _lastAck     = false;
     uint32_t            _cmdSentMs   = 0;
     StateChangeCallback _stateChangeCb;

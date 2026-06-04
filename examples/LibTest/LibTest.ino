@@ -260,9 +260,11 @@ void loop() {
         if (rec.state() != lastState || rec.recordCount() != lastCount) {
             lastState = rec.state();
             lastCount = rec.recordCount();
-            Serial.printf("[REC] state=%s records=%lu ack=%s\n",
+            Serial.printf("[REC] state=%s records=%lu/%lu mem=%u%% ack=%s\n",
                           recStateStr(rec.state()),
                           (unsigned long)rec.recordCount(),
+                          (unsigned long)rec.memorySize(),
+                          rec.memoryLevel(),
                           rec.lastAck() ? "ACK" : "NACK");
         }
     }

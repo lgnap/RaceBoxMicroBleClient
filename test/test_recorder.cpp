@@ -18,18 +18,27 @@ void tearDown() {}
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-// Build a status response packet (0xFF/0x22): state, dataRate, recordCount (LE)
-static UbxPacket makeStatusResponse(uint8_t state, uint8_t rate, uint32_t count) {
+// Build a status response packet (0xFF/0x22) per protocol rev 8:
+//   [0] state, [1] memLevel%, [2] security, [3] reserved,
+//   [4..7] recordCount LE, [8..11] memorySize LE
+static UbxPacket makeStatusResponse(uint8_t state, uint8_t memLevel, uint32_t count,
+                                    uint32_t memSize = 0) {
     UbxPacket pkt{};
     pkt.cls = UBX_CLASS_RACEBOX;
     pkt.id  = UBX_ID_REC_STATUS;
-    pkt.len = 6;
+    pkt.len = 12;
     pkt.payload[0] = state;
-    pkt.payload[1] = rate;
-    pkt.payload[2] = (uint8_t)(count & 0xFF);
-    pkt.payload[3] = (uint8_t)((count >> 8)  & 0xFF);
-    pkt.payload[4] = (uint8_t)((count >> 16) & 0xFF);
-    pkt.payload[5] = (uint8_t)((count >> 24) & 0xFF);
+    pkt.payload[1] = memLevel;
+    pkt.payload[2] = 0;  // security
+    pkt.payload[3] = 0;  // reserved
+    pkt.payload[4] = (uint8_t)(count & 0xFF);
+    pkt.payload[5] = (uint8_t)((count >> 8)  & 0xFF);
+    pkt.payload[6] = (uint8_t)((count >> 16) & 0xFF);
+    pkt.payload[7] = (uint8_t)((count >> 24) & 0xFF);
+    pkt.payload[8]  = (uint8_t)(memSize & 0xFF);
+    pkt.payload[9]  = (uint8_t)((memSize >> 8)  & 0xFF);
+    pkt.payload[10] = (uint8_t)((memSize >> 16) & 0xFF);
+    pkt.payload[11] = (uint8_t)((memSize >> 24) & 0xFF);
     return pkt;
 }
 
@@ -69,14 +78,14 @@ void test_initial_record_count_is_zero() {
 void test_status_response_updates_state_idle() {
     RaceBoxBle ble;
     RaceBoxRecorder rec(ble);
-    rec._onPacket(makeStatusResponse(0, 25, 0));  // IDLE, 25 Hz, 0 records
+    rec._onPacket(makeStatusResponse(0, 34, 0));  // IDLE, 34% mem, 0 records
     TEST_ASSERT_EQUAL((int)RecordingState::IDLE, (int)rec.state());
 }
 
 void test_status_response_updates_state_recording() {
     RaceBoxBle ble;
     RaceBoxRecorder rec(ble);
-    rec._onPacket(makeStatusResponse(1, 25, 42));
+    rec._onPacket(makeStatusResponse(1, 50, 42));
     TEST_ASSERT_EQUAL((int)RecordingState::RECORDING, (int)rec.state());
 }
 
@@ -90,25 +99,25 @@ void test_status_response_updates_state_paused() {
 void test_status_response_updates_record_count() {
     RaceBoxBle ble;
     RaceBoxRecorder rec(ble);
-    rec._onPacket(makeStatusResponse(1, 25, 123456u));
+    rec._onPacket(makeStatusResponse(1, 50, 123456u));
     TEST_ASSERT_EQUAL(123456u, rec.recordCount());
 }
 
-void test_status_response_updates_data_rate() {
+void test_status_response_updates_memory_level() {
     RaceBoxBle ble;
     RaceBoxRecorder rec(ble);
-    rec._onPacket(makeStatusResponse(1, 10, 0));
-    TEST_ASSERT_EQUAL((int)DataRate::HZ_10, (int)rec.dataRate());
+    rec._onPacket(makeStatusResponse(1, 42, 0));
+    TEST_ASSERT_EQUAL(42u, rec.memoryLevel());
 }
 
 void test_status_response_too_short_ignored() {
     RaceBoxBle ble;
     RaceBoxRecorder rec(ble);
-    // Payload < 6 bytes — must be ignored
+    // Payload < 8 bytes — must be ignored (need at least state + memLevel + 4 bytes count)
     UbxPacket p{};
     p.cls = UBX_CLASS_RACEBOX;
     p.id  = UBX_ID_REC_STATUS;
-    p.len = 3;
+    p.len = 6;
     rec._onPacket(p);
     // State must remain UNKNOWN
     TEST_ASSERT_EQUAL((int)RecordingState::UNKNOWN, (int)rec.state());
@@ -117,8 +126,8 @@ void test_status_response_too_short_ignored() {
 void test_status_large_record_count_le_decode() {
     RaceBoxBle ble;
     RaceBoxRecorder rec(ble);
-    // 0x01020304 = 16909060 in LE: payload = [04 03 02 01]
-    rec._onPacket(makeStatusResponse(1, 25, 0x01020304u));
+    // 0x01020304 = 16909060; stored at payload[4..7] in LE: [04 03 02 01]
+    rec._onPacket(makeStatusResponse(1, 50, 0x01020304u));
     TEST_ASSERT_EQUAL(0x01020304u, rec.recordCount());
 }
 
@@ -239,7 +248,7 @@ void test_start_recording_sends_unlock_then_config() {
     // Step 2: simulate unlock ACK → config sent
     rec._onPacket(makeUnlockAck());
     TEST_ASSERT_EQUAL_HEX8(UBX_ID_REC_CONFIG, g_stubLastSent.id);
-    TEST_ASSERT_EQUAL(8, g_stubLastSent.len);
+    TEST_ASSERT_EQUAL(12, g_stubLastSent.len);
     TEST_ASSERT_EQUAL_HEX8(0x01, g_stubLastSent.payload[0]);  // command = start
     TEST_ASSERT_EQUAL_HEX8(25,   g_stubLastSent.payload[1]);  // rate = 25 Hz
 }
@@ -254,6 +263,7 @@ void test_stop_recording_sends_unlock_then_stop() {
     // Then config on ACK
     rec._onPacket(makeUnlockAck());
     TEST_ASSERT_EQUAL_HEX8(UBX_ID_REC_CONFIG, g_stubLastSent.id);
+    TEST_ASSERT_EQUAL(12, g_stubLastSent.len);
     TEST_ASSERT_EQUAL_HEX8(0x00, g_stubLastSent.payload[0]);  // command = stop
 }
 
@@ -264,10 +274,17 @@ void test_start_with_filters_encodes_correctly() {
     rec.startRecording(DataRate::HZ_10, /*stationary=*/true, /*noFix=*/true, /*shutdown=*/5);
     rec._onPacket(makeUnlockAck());  // trigger config send after unlock
     TEST_ASSERT_EQUAL_HEX8(UBX_ID_REC_CONFIG, g_stubLastSent.id);
-    TEST_ASSERT_EQUAL_HEX8(10, g_stubLastSent.payload[1]);  // rate
-    TEST_ASSERT_EQUAL_HEX8(1,  g_stubLastSent.payload[2]);  // stationaryFilter
-    TEST_ASSERT_EQUAL_HEX8(1,  g_stubLastSent.payload[3]);  // noFixFilter
-    TEST_ASSERT_EQUAL_HEX8(5,  g_stubLastSent.payload[4]);  // autoShutdownMin
+    TEST_ASSERT_EQUAL(12, g_stubLastSent.len);
+    TEST_ASSERT_EQUAL_HEX8(10,   g_stubLastSent.payload[1]);  // rate = 10 Hz
+    // flags: bit1=stationary, bit2=noFix, bit3=autoShutdown → 0b00001110 = 0x0E
+    TEST_ASSERT_EQUAL_HEX8(0x0E, g_stubLastSent.payload[2]);
+    TEST_ASSERT_EQUAL_HEX8(0,    g_stubLastSent.payload[3]);  // reserved
+    // stationary speed threshold: 1389 mm/s LE = 0x6D 0x05
+    TEST_ASSERT_EQUAL_HEX8(0x6D, g_stubLastSent.payload[4]);
+    TEST_ASSERT_EQUAL_HEX8(0x05, g_stubLastSent.payload[5]);
+    // auto-shutdown: 5 min = 300 s = 0x012C LE = 0x2C 0x01
+    TEST_ASSERT_EQUAL_HEX8(0x2C, g_stubLastSent.payload[10]);
+    TEST_ASSERT_EQUAL_HEX8(0x01, g_stubLastSent.payload[11]);
 }
 
 // ── Runner ────────────────────────────────────────────────────────────────────
@@ -279,7 +296,7 @@ int main() {
     RUN_TEST(test_status_response_updates_state_recording);
     RUN_TEST(test_status_response_updates_state_paused);
     RUN_TEST(test_status_response_updates_record_count);
-    RUN_TEST(test_status_response_updates_data_rate);
+    RUN_TEST(test_status_response_updates_memory_level);
     RUN_TEST(test_status_response_too_short_ignored);
     RUN_TEST(test_status_large_record_count_le_decode);
     RUN_TEST(test_ack_sets_last_ack_true);
