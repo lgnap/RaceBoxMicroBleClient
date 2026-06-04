@@ -80,14 +80,10 @@ static constexpr uint32_t BENCH_STATUS_INTERVAL_MS = 5000;  // query STATUS ever
 
 // ── Live data cache ───────────────────────────────────────────────────────────
 static int16_t _lastBatteryRaw = -1;  // -1 = not yet received
-// RaceBox Micro sends input voltage × 10 (e.g. 126 → 12.6 V).
-// RaceBox Mini S sends battery level 0–100 %.
-// Heuristic: if raw > 100, it's a voltage reading (Micro behaviour).
+// RaceBox Micro sends input voltage × 10 (e.g. 126 → 12.6 V, 50 → 5.0 V).
+// Always display as voltage — do NOT interpret as percentage.
 static void printBattery(uint8_t raw) {
-    if (raw > 100)
-        Serial.printf("%.1fV", raw / 10.0f);
-    else
-        Serial.printf("%d%%", (int)raw);
+    Serial.printf("%.1fV", raw / 10.0f);
 }
 
 // ── Live data callback ────────────────────────────────────────────────────────
