@@ -129,7 +129,7 @@ static void dispatch(const char* line) {
         if (line[9] == ' ') sscanf(line + 10, "%u", &hz);
         DataRate rate;
         switch (hz) {
-            case  1: rate = DataRate::HZ_1;  break;
+            case  1: rate = DataRate::HZ_1;  break;  // ⚠ may NACK on RaceBox Micro
             case  5: rate = DataRate::HZ_5;  break;
             case 10: rate = DataRate::HZ_10; break;
             default: rate = DataRate::HZ_25; hz = 25; break;

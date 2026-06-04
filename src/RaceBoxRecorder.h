@@ -16,8 +16,11 @@ enum class RecordingState : uint8_t {
     UNKNOWN   = 0xFF,
 };
 
+// Recording data rates supported by the RaceBox firmware.
+// Note: HZ_1 is defined in the protocol but rejected by current RaceBox Micro
+// firmware (device replies with NACK). Use HZ_5, HZ_10 or HZ_25.
 enum class DataRate : uint8_t {
-    HZ_1  = 1,
+    HZ_1  = 1,   // ⚠ NACK on RaceBox Micro (not supported by device firmware)
     HZ_5  = 5,
     HZ_10 = 10,
     HZ_25 = 25,
