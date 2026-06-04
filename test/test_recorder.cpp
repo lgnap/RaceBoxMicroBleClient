@@ -155,7 +155,8 @@ void test_state_change_fires_callback() {
     RaceBoxRecorder rec(ble);
     StateChangeEvent captured = (StateChangeEvent)0xFF;
     rec.setStateChangeCallback([&](StateChangeEvent e) { captured = e; });
-    rec._onPacket(makeStateChange((uint8_t)StateChangeEvent::RECORDING_START));
+    // Protocol state 1 = running → RECORDING_START
+    rec._onPacket(makeStateChange(1));
     TEST_ASSERT_EQUAL((int)StateChangeEvent::RECORDING_START, (int)captured);
 }
 
@@ -164,7 +165,8 @@ void test_state_change_stop_fires_callback() {
     RaceBoxRecorder rec(ble);
     StateChangeEvent captured = (StateChangeEvent)0xFF;
     rec.setStateChangeCallback([&](StateChangeEvent e) { captured = e; });
-    rec._onPacket(makeStateChange((uint8_t)StateChangeEvent::RECORDING_STOP));
+    // Protocol state 0 = disabled → RECORDING_STOP
+    rec._onPacket(makeStateChange(0));
     TEST_ASSERT_EQUAL((int)StateChangeEvent::RECORDING_STOP, (int)captured);
 }
 

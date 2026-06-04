@@ -210,7 +210,18 @@ void RaceBoxRecorder::_onPacket(const UbxPacket& pkt) {
                 _dataRate = static_cast<DataRate>(pkt.payload[2]);
             }
             if (_stateChangeCb) {
-                _stateChangeCb(static_cast<StateChangeEvent>(pkt.payload[0]));
+                // Map protocol state byte to StateChangeEvent:
+                //   0=disabled → RECORDING_STOP
+                //   1=running  → RECORDING_START
+                //   2=paused   → RECORDING_PAUSE
+                StateChangeEvent ev;
+                switch (pkt.payload[0]) {
+                    case 0:  ev = StateChangeEvent::RECORDING_STOP;   break;
+                    case 1:  ev = StateChangeEvent::RECORDING_START;  break;
+                    case 2:  ev = StateChangeEvent::RECORDING_PAUSE;  break;
+                    default: ev = StateChangeEvent::RECORDING_STOP;   break;
+                }
+                _stateChangeCb(ev);
             }
         }
         break;
