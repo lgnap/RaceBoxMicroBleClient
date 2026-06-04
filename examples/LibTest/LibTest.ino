@@ -5,8 +5,6 @@
  * commands at 115200 baud.  Flash to any ESP32 board with built-in BLE.
  *
  * ── Commands ─────────────────────────────────────────────────────────────────
- *   UNLOCK [code]      Unlock memory (REQUIRED before REC START, resets on reconnect)
- *                     Default code: 123456. Find your device code in RaceBox app settings.
  *   STATUS             Query recording status (state + record count)
  *   REC START [hz]     Start standalone recording (hz = 5|10|25, default 25)
  *   REC STOP           Stop standalone recording
@@ -75,7 +73,10 @@ static void onLiveData(const RaceBoxData& d) {
 RaceBoxBle racebox(onLiveData);
 
 // ── Recorder (default active mode) ───────────────────────────────────────────
+// Set your device's security code (RaceBox factory default: 123456).
+// The Recorder sends unlock automatically before every REC START / REC STOP.
 RaceBoxRecorder rec(racebox);
+static constexpr uint32_t SECURITY_CODE = 123456;
 
 // ── Downloader (activated on DOWNLOAD command) ───────────────────────────────
 RaceBoxDownloader dl(racebox, [](const RaceBoxData& d, uint32_t index) {
@@ -137,19 +138,6 @@ static void dispatch(const char* line) {
         Serial.printf("FIFO overflow: %lu bytes dropped\n",
                       (unsigned long)racebox.fifoOverflowCount());
 
-    } else if (strncmp(line, "UNLOCK", 6) == 0) {
-        // Send 0xFF/0x30 MEM_UNLOCK — required before any recording command.
-        // The memory lock resets on every new BLE connection.
-        // Usage: UNLOCK [code]  (default code: 123456)
-        if (!racebox.isConnected()) { Serial.println("ERROR not connected"); return; }
-        uint32_t code = 123456;
-        if (line[6] == ' ') sscanf(line + 7, "%lu", (unsigned long*)&code);
-        if (rec.unlockMemory(code)) {
-            Serial.printf("UNLOCK sent (code=%lu) — watching for ACK/NACK...\n", (unsigned long)code);
-        } else {
-            Serial.println("ERROR: sendCommand failed");
-        }
-
     } else if (strcmp(line, "STATUS") == 0) {
         if (!racebox.isConnected()) { Serial.println("ERROR not connected"); return; }
         if (_downloadMode) activateRecorder();
@@ -188,7 +176,7 @@ static void dispatch(const char* line) {
 
     } else {
         Serial.printf("ERROR unknown command: %s\n", line);
-        Serial.println("Commands: PING  LIVE  RAWDUMP  FIFO  UNLOCK  STATUS  REC START [hz]  REC STOP  DOWNLOAD");
+        Serial.println("Commands: PING  LIVE  RAWDUMP  FIFO  STATUS  REC START [hz]  REC STOP  DOWNLOAD");
     }
 }
 
@@ -197,13 +185,14 @@ void setup() {
     Serial.begin(115200);
     delay(500);
     Serial.println("=== RaceBoxMicroBleClient LibTest ===");
-    Serial.println("Commands: PING  LIVE  RAWDUMP  FIFO  UNLOCK  STATUS  REC START [hz]  REC STOP  DOWNLOAD");
+    Serial.println("Commands: PING  LIVE  RAWDUMP  FIFO  STATUS  REC START [hz]  REC STOP  DOWNLOAD");
 
     racebox.setOverflowCallback([](uint32_t dropped) {
         Serial.printf("[WARN] FIFO overflow — %lu bytes dropped (total)\n", (unsigned long)dropped);
     });
 
     racebox.begin();
+    rec.setSecurityCode(SECURITY_CODE);
     rec.begin();  // default: recorder mode
 
     rec.setStateChangeCallback([](StateChangeEvent ev) {

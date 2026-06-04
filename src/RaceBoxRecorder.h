@@ -44,11 +44,18 @@ using StateChangeCallback = std::function<void(StateChangeEvent event)>;
  * as the packet callback and handles 0xFF/0x22 (status response) and
  * 0xFF/0x26 (state change) messages.
  *
+ * Memory unlock:
+ *   The RaceBox requires a security code unlock (0xFF/0x30) before accepting
+ *   any recording command. Call setSecurityCode() once with your device's code
+ *   and the Recorder will handle unlock transparently — including after every
+ *   reconnection. Default code is 123456 (RaceBox factory default).
+ *
  * Typical usage:
  *   RaceBoxRecorder rec(ble);
+ *   rec.setSecurityCode(123456);   // once — handled automatically after this
  *   rec.begin();
- *   rec.queryStatus();           // async — result available after update()
- *   rec.startRecording(DataRate::HZ_25);
+ *   rec.queryStatus();             // async — result available after update()
+ *   rec.startRecording(DataRate::HZ_25);   // unlock sent automatically
  *   ...
  *   rec.stopRecording();
  */
@@ -62,30 +69,30 @@ public:
     // Drive internal state (ACK timeout). Call every loop iteration.
     void update();
 
-    // ── Commands (async — result via callbacks / state flags) ────────────────
+    // ── Security code ─────────────────────────────────────────────────────────
 
-    // Send 0xFF/0x30 to unlock memory before issuing any recording command.
-    // REQUIRED on every new BLE connection — the lock resets on disconnect.
-    // securityCode: the preset code configured on the device (default 123456).
-    // Returns false if BLE is not connected.
-    // The device replies ACK (0xFF/0x02) on success, NACK (0xFF/0x03) on wrong code.
-    // After several failed attempts the device may disconnect.
-    bool unlockMemory(uint32_t securityCode = 123456);
+    // Set the memory security code (default: 123456).
+    // Once set, startRecording() and stopRecording() will automatically send
+    // the unlock command before the actual recording command.
+    // The lock resets on every BLE reconnection — the Recorder handles this.
+    void setSecurityCode(uint32_t code) { _securityCode = code; }
+
+    // ── Commands (async — result via lastAck() / state()) ────────────────────
 
     // Send 0xFF/0x22 to query recording status and record count.
     // Results available after the device replies (check state/recordCount).
     void queryStatus();
 
-    // Send 0xFF/0x25 to start/configure recording.
+    // Send 0xFF/0x25 to start recording (preceded by auto-unlock if code is set).
     // stationaryFilter: suppress points when device is stationary
     // noFixFilter:      suppress points when there is no GPS fix
-    // autoShutdownMin:  0 = disabled; otherwise shut down after N minutes of inactivity
+    // autoShutdownMin:  0 = disabled; otherwise shut down after N minutes
     void startRecording(DataRate rate = DataRate::HZ_25,
                         bool stationaryFilter = false,
                         bool noFixFilter = false,
                         uint8_t autoShutdownMin = 0);
 
-    // Send 0xFF/0x25 with stop command.
+    // Send 0xFF/0x25 with stop command (preceded by auto-unlock if code is set).
     void stopRecording();
 
     // ── State (updated asynchronously on receipt of device responses) ─────────
@@ -101,14 +108,27 @@ public:
     void _onPacket(const UbxPacket& pkt);
 
 private:
+    // Pending command type — queued while waiting for unlock ACK
+    enum class _Pending : uint8_t { NONE, START, STOP };
+
     RaceBoxBle&         _ble;
     RecordingState      _state       = RecordingState::UNKNOWN;
     DataRate            _dataRate    = DataRate::HZ_25;
     uint32_t            _recordCount = 0;
     bool                _lastAck     = false;
-    uint32_t            _cmdSentMs   = 0;  // millis() when last command was sent
+    uint32_t            _cmdSentMs   = 0;
     StateChangeCallback _stateChangeCb;
 
+    uint32_t            _securityCode  = 123456;
+    _Pending            _pendingCmd    = _Pending::NONE;
+
+    // Pending start args (saved while waiting for unlock ACK)
+    DataRate  _pendingRate            = DataRate::HZ_25;
+    bool      _pendingStationary      = false;
+    bool      _pendingNoFix           = false;
+    uint8_t   _pendingAutoShutdown    = 0;
+
+    bool _sendUnlock();
     void _sendConfig(uint8_t command, DataRate rate,
                      bool stationaryFilter, bool noFixFilter,
                      uint8_t autoShutdownMin);

@@ -33,7 +33,12 @@ static UbxPacket makeStatusResponse(uint8_t state, uint8_t rate, uint32_t count)
     return pkt;
 }
 
-static UbxPacket makeAck()  { UbxPacket p{}; p.cls=UBX_CLASS_RACEBOX; p.id=UBX_ID_ACK;  p.len=0; return p; }
+static UbxPacket makeAck(uint8_t ackedId = 0)  {
+    UbxPacket p{}; p.cls=UBX_CLASS_RACEBOX; p.id=UBX_ID_ACK;
+    p.len=2; p.payload[0]=UBX_CLASS_RACEBOX; p.payload[1]=ackedId;
+    return p;
+}
+static UbxPacket makeUnlockAck() { return makeAck(UBX_ID_MEM_UNLOCK); }
 static UbxPacket makeNack() { UbxPacket p{}; p.cls=UBX_CLASS_RACEBOX; p.id=UBX_ID_NACK; p.len=0; return p; }
 
 static UbxPacket makeStateChange(uint8_t event) {
@@ -221,23 +226,33 @@ void test_query_status_sends_correct_packet() {
     TEST_ASSERT_EQUAL(1, g_stubSendCount);
 }
 
-void test_start_recording_sends_config_packet() {
+void test_start_recording_sends_unlock_then_config() {
+    // startRecording() now sends unlock (0x30) first, config (0x25) after ACK
     RaceBoxBle ble;
     RaceBoxRecorder rec(ble);
     rec.begin();
     rec.startRecording(DataRate::HZ_25);
-    TEST_ASSERT_EQUAL_HEX8(UBX_CLASS_RACEBOX,  g_stubLastSent.cls);
-    TEST_ASSERT_EQUAL_HEX8(UBX_ID_REC_CONFIG,  g_stubLastSent.id);
+    // Step 1: unlock sent
+    TEST_ASSERT_EQUAL_HEX8(UBX_CLASS_RACEBOX, g_stubLastSent.cls);
+    TEST_ASSERT_EQUAL_HEX8(UBX_ID_MEM_UNLOCK, g_stubLastSent.id);
+    TEST_ASSERT_EQUAL(4, g_stubLastSent.len);
+    // Step 2: simulate unlock ACK → config sent
+    rec._onPacket(makeUnlockAck());
+    TEST_ASSERT_EQUAL_HEX8(UBX_ID_REC_CONFIG, g_stubLastSent.id);
     TEST_ASSERT_EQUAL(8, g_stubLastSent.len);
     TEST_ASSERT_EQUAL_HEX8(0x01, g_stubLastSent.payload[0]);  // command = start
     TEST_ASSERT_EQUAL_HEX8(25,   g_stubLastSent.payload[1]);  // rate = 25 Hz
 }
 
-void test_stop_recording_sends_stop_command() {
+void test_stop_recording_sends_unlock_then_stop() {
     RaceBoxBle ble;
     RaceBoxRecorder rec(ble);
     rec.begin();
     rec.stopRecording();
+    // Unlock first
+    TEST_ASSERT_EQUAL_HEX8(UBX_ID_MEM_UNLOCK, g_stubLastSent.id);
+    // Then config on ACK
+    rec._onPacket(makeUnlockAck());
     TEST_ASSERT_EQUAL_HEX8(UBX_ID_REC_CONFIG, g_stubLastSent.id);
     TEST_ASSERT_EQUAL_HEX8(0x00, g_stubLastSent.payload[0]);  // command = stop
 }
@@ -247,6 +262,8 @@ void test_start_with_filters_encodes_correctly() {
     RaceBoxRecorder rec(ble);
     rec.begin();
     rec.startRecording(DataRate::HZ_10, /*stationary=*/true, /*noFix=*/true, /*shutdown=*/5);
+    rec._onPacket(makeUnlockAck());  // trigger config send after unlock
+    TEST_ASSERT_EQUAL_HEX8(UBX_ID_REC_CONFIG, g_stubLastSent.id);
     TEST_ASSERT_EQUAL_HEX8(10, g_stubLastSent.payload[1]);  // rate
     TEST_ASSERT_EQUAL_HEX8(1,  g_stubLastSent.payload[2]);  // stationaryFilter
     TEST_ASSERT_EQUAL_HEX8(1,  g_stubLastSent.payload[3]);  // noFixFilter
@@ -274,8 +291,8 @@ int main() {
     RUN_TEST(test_wrong_class_packet_ignored);
     RUN_TEST(test_ack_timeout_clears_pending_after_5s);
     RUN_TEST(test_query_status_sends_correct_packet);
-    RUN_TEST(test_start_recording_sends_config_packet);
-    RUN_TEST(test_stop_recording_sends_stop_command);
+    RUN_TEST(test_start_recording_sends_unlock_then_config);
+    RUN_TEST(test_stop_recording_sends_unlock_then_stop);
     RUN_TEST(test_start_with_filters_encodes_correctly);
     return UNITY_END();
 }
