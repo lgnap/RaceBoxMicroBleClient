@@ -26,6 +26,7 @@ RaceBoxDownloader downloader(racebox, [](const RaceBoxData& d, uint32_t index) {
 
 void setup() {
     Serial.begin(115200);
+    racebox.setDebugCallback([](const char* msg) { Serial.println(msg); });
     racebox.begin();
 
     // Wait until connected

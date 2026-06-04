@@ -24,6 +24,7 @@ RaceBoxBle racebox([](const RaceBoxData& d) {
 
 void setup() {
     Serial.begin(115200);
+    racebox.setDebugCallback([](const char* msg) { Serial.println(msg); });
     racebox.begin();
 }
 

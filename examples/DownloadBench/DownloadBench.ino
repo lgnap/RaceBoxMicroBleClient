@@ -7,7 +7,7 @@
  * Expected result (no FIFO overflow):
  *   [BENCH] Done — 47043 records in 8234 ms (5714 rec/s), overflow=0 bytes
  *
- * If overflow > 0, increase RACEBOX_FIFO_SIZE in RaceBoxBle.h or reduce
+ * If overflow > 0, increase RACEBOX_FIFO_SIZE in RaceBoxFifo.h or reduce
  * work done inside the record callback.
  *
  * ── Commands (USB serial, 115200 baud) ───────────────────────────────────────
@@ -104,6 +104,7 @@ void setup() {
     Serial.println("Commands: PING  FIFO  DOWNLOAD");
     Serial.println("Verifies FIFO integrity: overflow=0 means no data was dropped.");
 
+    racebox.setDebugCallback([](const char* msg) { Serial.println(msg); });
     racebox.setOverflowCallback([](uint32_t dropped) {
         // Called from NimBLE task — keep it short
         Serial.printf("[WARN] FIFO overflow — %lu bytes dropped (total)\n",

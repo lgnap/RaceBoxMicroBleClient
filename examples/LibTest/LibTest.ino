@@ -268,6 +268,10 @@ void setup() {
     Serial.println("=== RaceBoxMicroBleClient LibTest ===");
     Serial.println("Commands: PING  LIVE  RAWDUMP  FIFO  STATUS  REC START [hz]  REC STOP  DOWNLOAD");
 
+    racebox.setDebugCallback([](const char* msg) { Serial.println(msg); });
+    racebox.setErrorCallback([](uint32_t count) {
+        Serial.printf("[BLE] UBX decode error #%lu\n", (unsigned long)count);
+    });
     racebox.setOverflowCallback([](uint32_t dropped) {
         Serial.printf("[WARN] FIFO overflow — %lu bytes dropped (total)\n", (unsigned long)dropped);
     });
