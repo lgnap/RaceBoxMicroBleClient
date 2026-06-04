@@ -71,10 +71,12 @@ static const uint32_t BENCH_SESSION_DURATIONS_MS[] = { 10000, 30000, 60000 };
 static constexpr uint8_t BENCH_SESSION_COUNT = 3;
 static constexpr uint32_t BENCH_BETWEEN_MS   = 500;   // pause between sessions
 
-static BenchRecState _benchRecState    = BenchRecState::IDLE;
-static uint8_t       _benchRecSession  = 0;   // current session index (0-based)
-static uint32_t      _benchRecStartMs  = 0;   // millis() when current phase began
-static uint32_t      _benchRecordsAtSessionStart = 0;  // record count snapshot
+static BenchRecState _benchRecState      = BenchRecState::IDLE;
+static uint8_t       _benchRecSession    = 0;   // current session index (0-based)
+static uint32_t      _benchRecStartMs    = 0;   // millis() when current phase began
+static uint32_t      _benchRecordsAtSessionStart = 0;  // record count at session start (from STATUS)
+static uint32_t      _benchRecLastStatusMs = 0; // millis() of last STATUS query during RECBENCH
+static constexpr uint32_t BENCH_STATUS_INTERVAL_MS = 5000;  // query STATUS every 5s during recording
 
 // ── Live data callback ────────────────────────────────────────────────────────
 static void onLiveData(const RaceBoxData& d) {
@@ -267,8 +269,11 @@ void setup() {
             ev == StateChangeEvent::RECORDING_START) {
             uint32_t durMs = BENCH_SESSION_DURATIONS_MS[_benchRecSession];
             _benchRecStartMs = millis();
+            // Snapshot current count and immediately query to get fresh value
             _benchRecordsAtSessionStart = rec.recordCount();
-            Serial.printf("[RECBENCH] Session %u/%u — recording for %lu s\n",
+            _benchRecLastStatusMs = millis();
+            rec.queryStatus();  // will update rec.recordCount() async; snapshot updated below when response arrives
+            Serial.printf("[RECBENCH] Session %u/%u — recording for %lu s (querying STATUS...)\n",
                           _benchRecSession + 1, BENCH_SESSION_COUNT,
                           (unsigned long)(durMs / 1000));
             _benchRecState = BenchRecState::RECORDING;
@@ -276,14 +281,15 @@ void setup() {
 
         if (_benchRecState == BenchRecState::STOPPING &&
             ev == StateChangeEvent::RECORDING_STOP) {
-            uint32_t sessionRecords = rec.recordCount() - _benchRecordsAtSessionStart;
-            Serial.printf("[RECBENCH] Session %u/%u done — %lu records added\n",
-                          _benchRecSession + 1, BENCH_SESSION_COUNT,
-                          (unsigned long)sessionRecords);
+            // Query final STATUS to get accurate record count before computing delta
+            rec.queryStatus();
+            Serial.printf("[RECBENCH] Session %u/%u — STOP received, querying final STATUS...\n",
+                          _benchRecSession + 1, BENCH_SESSION_COUNT);
+            // Delta will be printed by the [REC] status handler in loop() when response arrives
             _benchRecSession++;
             if (_benchRecSession >= BENCH_SESSION_COUNT) {
-                Serial.printf("[RECBENCH] All %u sessions complete. Total records: %lu\n",
-                              BENCH_SESSION_COUNT, (unsigned long)rec.recordCount());
+                Serial.printf("[RECBENCH] All %u sessions complete — see [REC] line for total records.\n",
+                              BENCH_SESSION_COUNT);
                 Serial.println("[RECBENCH] Now flash DownloadBench and run DOWNLOAD to verify boundaries.");
                 _benchRecState = BenchRecState::IDLE;
             } else {
@@ -327,6 +333,11 @@ void loop() {
                 Serial.printf("[RECBENCH] Session %u/%u — %lu s remaining\n",
                               _benchRecSession + 1, BENCH_SESSION_COUNT,
                               (unsigned long)remaining);
+        }
+        // Periodic STATUS query to keep rec.recordCount() up to date
+        if (millis() - _benchRecLastStatusMs >= BENCH_STATUS_INTERVAL_MS) {
+            _benchRecLastStatusMs = millis();
+            rec.queryStatus();
         }
         if (elapsed >= durMs) {
             Serial.printf("[RECBENCH] Session %u/%u — duration reached, sending REC STOP...\n",
@@ -374,14 +385,27 @@ void loop() {
         static RecordingState lastState = RecordingState::UNKNOWN;
         static uint32_t lastCount = 0;
         if (rec.state() != lastState || rec.recordCount() != lastCount) {
+            uint32_t newCount = rec.recordCount();
+            // RECBENCH: update session baseline on first STATUS after session start
+            // (queryStatus() was sent right after RECORDING_START; this is the response)
+            if (_benchRecState == BenchRecState::RECORDING && lastCount == _benchRecordsAtSessionStart) {
+                _benchRecordsAtSessionStart = newCount;
+            }
             lastState = rec.state();
-            lastCount = rec.recordCount();
-            Serial.printf("[REC] state=%s records=%lu/%lu mem=%u%% ack=%s\n",
+            lastCount = newCount;
+            Serial.printf("[REC] state=%s records=%lu/%lu mem=%u%% ack=%s",
                           recStateStr(rec.state()),
                           (unsigned long)rec.recordCount(),
                           (unsigned long)rec.memorySize(),
                           rec.memoryLevel(),
                           rec.lastAck() ? "ACK" : "NACK");
+            // Show session delta if RECBENCH is active
+            if (_benchRecState == BenchRecState::RECORDING || _benchRecState == BenchRecState::STOPPING) {
+                uint32_t delta = (newCount >= _benchRecordsAtSessionStart)
+                                 ? newCount - _benchRecordsAtSessionStart : 0;
+                Serial.printf(" (+%lu this session)", (unsigned long)delta);
+            }
+            Serial.println();
         }
     }
 
