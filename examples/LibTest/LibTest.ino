@@ -8,6 +8,8 @@
  *   STATUS             Query recording status (state + record count)
  *   REC START [hz]     Start standalone recording (hz = 5|10|25, default 25)
  *   REC STOP           Stop standalone recording
+ *   RECBENCH           Auto-chain 3 sessions (10s / 30s / 60s) with live status
+ *   RECBENCH STOP      Abort RECBENCH early
  *   DOWNLOAD           Download stored history (switches to downloader mode)
  *   LIVE               Toggle live data printing ON/OFF
  *   RAWDUMP            Toggle raw UBX packet hex dump (protocol debugging)
@@ -53,6 +55,26 @@ static uint8_t linePos = 0;
 static bool _liveEnabled   = true;   // print live GPS data
 static bool _downloadMode  = false;  // true while downloader is active
 static bool _downloadDone  = false;
+
+// ── RECBENCH state machine ────────────────────────────────────────────────────
+// RECBENCH chains N recording sessions with configurable durations.
+// State machine driven by STATE CHANGE events + millis() timer.
+enum class BenchRecState : uint8_t {
+    IDLE,       // not running
+    STARTING,   // rec.startRecording() sent, waiting for RECORDING_START event
+    RECORDING,  // recording, timing until duration expires
+    STOPPING,   // rec.stopRecording() sent, waiting for RECORDING_STOP event
+    BETWEEN,    // brief pause (500ms) before next session
+};
+
+static const uint32_t BENCH_SESSION_DURATIONS_MS[] = { 10000, 30000, 60000 };
+static constexpr uint8_t BENCH_SESSION_COUNT = 3;
+static constexpr uint32_t BENCH_BETWEEN_MS   = 500;   // pause between sessions
+
+static BenchRecState _benchRecState    = BenchRecState::IDLE;
+static uint8_t       _benchRecSession  = 0;   // current session index (0-based)
+static uint32_t      _benchRecStartMs  = 0;   // millis() when current phase began
+static uint32_t      _benchRecordsAtSessionStart = 0;  // record count snapshot
 
 // ── Live data callback ────────────────────────────────────────────────────────
 static void onLiveData(const RaceBoxData& d) {
@@ -173,6 +195,34 @@ static void dispatch(const char* line) {
         rec.stopRecording();
         Serial.println("REC STOP sent");
 
+    } else if (strcmp(line, "RECBENCH") == 0) {
+        if (!racebox.isConnected()) { Serial.println("ERROR not connected"); return; }
+        if (_benchRecState != BenchRecState::IDLE) {
+            Serial.println("ERROR RECBENCH already running (RECBENCH STOP to abort)");
+            return;
+        }
+        if (_downloadMode) activateRecorder();
+        _benchRecSession = 0;
+        _benchRecState   = BenchRecState::STARTING;
+        Serial.printf("[RECBENCH] Starting — %u sessions: ", BENCH_SESSION_COUNT);
+        for (uint8_t i = 0; i < BENCH_SESSION_COUNT; i++) {
+            Serial.printf("%lus%s",
+                          (unsigned long)(BENCH_SESSION_DURATIONS_MS[i] / 1000),
+                          i < BENCH_SESSION_COUNT - 1 ? " / " : "\n");
+        }
+        Serial.printf("[RECBENCH] Session 1/%u — sending REC START 25Hz...\n",
+                      BENCH_SESSION_COUNT);
+        rec.startRecording(DataRate::HZ_25);
+
+    } else if (strcmp(line, "RECBENCH STOP") == 0) {
+        if (_benchRecState == BenchRecState::IDLE) {
+            Serial.println("RECBENCH not running");
+        } else {
+            _benchRecState = BenchRecState::IDLE;
+            rec.stopRecording();
+            Serial.println("[RECBENCH] Aborted");
+        }
+
     } else if (strcmp(line, "DOWNLOAD") == 0) {
         if (!racebox.isConnected()) { Serial.println("ERROR not connected"); return; }
         dl.begin();  // registers downloader callback, sends 0xFF/0x23 trigger
@@ -182,7 +232,7 @@ static void dispatch(const char* line) {
 
     } else {
         Serial.printf("ERROR unknown command: %s\n", line);
-        Serial.println("Commands: PING  LIVE  RAWDUMP  FIFO  STATUS  REC START [hz]  REC STOP  DOWNLOAD");
+        Serial.println("Commands: PING  LIVE  RAWDUMP  FIFO  STATUS  REC START [hz]  REC STOP  DOWNLOAD  RECBENCH  RECBENCH STOP");
     }
 }
 
@@ -211,6 +261,37 @@ void setup() {
             default:                                 evStr = "UNKNOWN"; break;
         }
         Serial.printf("[STATE] %s\n", evStr);
+
+        // RECBENCH state machine: advance on state change events
+        if (_benchRecState == BenchRecState::STARTING &&
+            ev == StateChangeEvent::RECORDING_START) {
+            uint32_t durMs = BENCH_SESSION_DURATIONS_MS[_benchRecSession];
+            _benchRecStartMs = millis();
+            _benchRecordsAtSessionStart = rec.recordCount();
+            Serial.printf("[RECBENCH] Session %u/%u — recording for %lu s\n",
+                          _benchRecSession + 1, BENCH_SESSION_COUNT,
+                          (unsigned long)(durMs / 1000));
+            _benchRecState = BenchRecState::RECORDING;
+        }
+
+        if (_benchRecState == BenchRecState::STOPPING &&
+            ev == StateChangeEvent::RECORDING_STOP) {
+            uint32_t sessionRecords = rec.recordCount() - _benchRecordsAtSessionStart;
+            Serial.printf("[RECBENCH] Session %u/%u done — %lu records added\n",
+                          _benchRecSession + 1, BENCH_SESSION_COUNT,
+                          (unsigned long)sessionRecords);
+            _benchRecSession++;
+            if (_benchRecSession >= BENCH_SESSION_COUNT) {
+                Serial.printf("[RECBENCH] All %u sessions complete. Total records: %lu\n",
+                              BENCH_SESSION_COUNT, (unsigned long)rec.recordCount());
+                Serial.println("[RECBENCH] Now flash DownloadBench and run DOWNLOAD to verify boundaries.");
+                _benchRecState = BenchRecState::IDLE;
+            } else {
+                // Brief pause before next session
+                _benchRecStartMs = millis();
+                _benchRecState   = BenchRecState::BETWEEN;
+            }
+        }
     });
 }
 
@@ -232,6 +313,35 @@ void loop() {
 
     // ── Drive BLE + active module ─────────────────────────────────────────────
     racebox.update();
+
+    // ── RECBENCH tick ─────────────────────────────────────────────────────────
+    if (_benchRecState == BenchRecState::RECORDING) {
+        uint32_t durMs = BENCH_SESSION_DURATIONS_MS[_benchRecSession];
+        uint32_t elapsed = millis() - _benchRecStartMs;
+        // Print countdown every second
+        static uint32_t lastCountdown = 0;
+        uint32_t remaining = (elapsed < durMs) ? (durMs - elapsed) / 1000 : 0;
+        if (remaining != lastCountdown) {
+            lastCountdown = remaining;
+            if (remaining > 0)
+                Serial.printf("[RECBENCH] Session %u/%u — %lu s remaining\n",
+                              _benchRecSession + 1, BENCH_SESSION_COUNT,
+                              (unsigned long)remaining);
+        }
+        if (elapsed >= durMs) {
+            Serial.printf("[RECBENCH] Session %u/%u — duration reached, sending REC STOP...\n",
+                          _benchRecSession + 1, BENCH_SESSION_COUNT);
+            _benchRecState = BenchRecState::STOPPING;
+            rec.stopRecording();
+        }
+    } else if (_benchRecState == BenchRecState::BETWEEN) {
+        if (millis() - _benchRecStartMs >= BENCH_BETWEEN_MS) {
+            _benchRecState = BenchRecState::STARTING;
+            Serial.printf("[RECBENCH] Session %u/%u — sending REC START 25Hz...\n",
+                          _benchRecSession + 1, BENCH_SESSION_COUNT);
+            rec.startRecording(DataRate::HZ_25);
+        }
+    }
 
     if (_downloadMode) {
         dl.update();
