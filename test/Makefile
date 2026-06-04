@@ -8,7 +8,7 @@ SRC_FILES := $(filter-out ../src/RaceBoxBle.cpp, $(wildcard ../src/*.cpp))
 # Stub replacing RaceBoxBle.cpp for native builds.
 STUB_FILES := ../test/mocks/RaceBoxBle_stub.cpp
 
-.PHONY: all test download-unity
+.PHONY: all test download-unity clean
 
 all: test
 
@@ -17,6 +17,9 @@ download-unity:
 	  echo "Downloading Unity 2.5.2..."; \
 	  curl -sL https://github.com/ThrowTheSwitch/Unity/archive/refs/tags/v2.5.2.tar.gz | tar -xz -C /tmp; \
 	fi
+
+clean:
+	@rm -f $(addprefix /tmp/,$(basename $(notdir $(wildcard test_*.cpp))))
 
 test: download-unity
 	@FAIL=0; \
