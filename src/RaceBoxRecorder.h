@@ -37,6 +37,10 @@ enum class StateChangeEvent : uint8_t {
 // Callback fired when a 0xFF/0x26 State Change packet arrives (during download).
 using StateChangeCallback = std::function<void(StateChangeEvent event)>;
 
+// Callback fired on each 0xFF/0x24 erase-progress notification (0–100 %).
+// Also called with 100 when the final ACK arrives (erase complete).
+using EraseProgressCallback = std::function<void(uint8_t percent)>;
+
 /**
  * Controls standalone recording on a RaceBox Mini S / Micro.
  *
@@ -95,6 +99,15 @@ public:
     // Send 0xFF/0x25 with stop command (preceded by auto-unlock if code is set).
     void stopRecording();
 
+    // Start a full memory erase (preceded by auto-unlock).
+    // Progress reported via setEraseProgressCallback(). Can take several minutes.
+    // Refused if BLE is not connected or an erase is already in progress.
+    void eraseMemory();
+
+    // Cancel an ongoing erase (sends 0xFF/0x24 with 1 byte).
+    // No-op if not erasing.
+    void cancelErase();
+
     // ── State (updated asynchronously on receipt of device responses) ─────────
     // state():       current recording state (from 0xFF/0x22 STATUS or 0xFF/0x26 STATE CHANGE)
     // memoryLevel(): memory usage in percent 0..100 (from 0xFF/0x22 STATUS)
@@ -107,16 +120,21 @@ public:
     uint32_t       memorySize()  const { return _memorySize; }
     DataRate       dataRate()    const { return _dataRate; }
     bool           lastAck()     const { return _lastAck; }  // true=ACK, false=NACK
+    bool           isErasing()   const { return _isErasing; }
+    uint8_t        eraseProgress() const { return _eraseProgress; }
 
     // Optional: called when a 0xFF/0x26 State Change arrives (during download)
     void setStateChangeCallback(StateChangeCallback cb) { _stateChangeCb = std::move(cb); }
+
+    // Optional: called on each erase progress notification (0–100 %) and on completion.
+    void setEraseProgressCallback(EraseProgressCallback cb) { _eraseProgressCb = std::move(cb); }
 
     // Called by RaceBoxBle packet callback — do not call directly.
     void _onPacket(const UbxPacket& pkt);
 
 private:
     // Pending command type — queued while waiting for unlock ACK
-    enum class _Pending : uint8_t { NONE, START, STOP };
+    enum class _Pending : uint8_t { NONE, START, STOP, ERASE };
 
     RaceBoxBle&         _ble;
     RecordingState      _state       = RecordingState::UNKNOWN;
@@ -126,7 +144,10 @@ private:
     DataRate            _dataRate    = DataRate::HZ_25;  // from STATE CHANGE
     bool                _lastAck     = false;
     uint32_t            _cmdSentMs   = 0;
-    StateChangeCallback _stateChangeCb;
+    StateChangeCallback   _stateChangeCb;
+    EraseProgressCallback _eraseProgressCb;
+    bool     _isErasing     = false;
+    uint8_t  _eraseProgress = 0;
 
     uint32_t            _securityCode  = 123456;
     _Pending            _pendingCmd    = _Pending::NONE;
@@ -141,4 +162,5 @@ private:
     void _sendConfig(uint8_t command, DataRate rate,
                      bool stationaryFilter, bool noFixFilter,
                      uint8_t autoShutdownMin);
+    void _sendErase();
 };

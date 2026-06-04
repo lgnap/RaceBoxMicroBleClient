@@ -75,6 +75,43 @@ void RaceBoxRecorder::stopRecording() {
     _sendUnlock();
 }
 
+// ── eraseMemory() ─────────────────────────────────────────────────────────────
+void RaceBoxRecorder::eraseMemory() {
+    if (_isErasing) {
+        Serial.println("[Recorder] Erase already in progress");
+        return;
+    }
+    _pendingCmd = _Pending::ERASE;
+    _sendUnlock();
+}
+
+// ── cancelErase() ─────────────────────────────────────────────────────────────
+void RaceBoxRecorder::cancelErase() {
+    if (!_isErasing) return;
+    UbxPacket pkt{};
+    pkt.cls        = UBX_CLASS_RACEBOX;
+    pkt.id         = UBX_ID_ERASE;
+    pkt.len        = 1;
+    pkt.payload[0] = 0x00;  // value ignored by device
+    _ble.sendCommand(pkt);
+    _isErasing = false;
+    Serial.println("[Recorder] Erase cancelled");
+}
+
+// ── _sendErase() — internal ───────────────────────────────────────────────────
+void RaceBoxRecorder::_sendErase() {
+    UbxPacket pkt{};
+    pkt.cls = UBX_CLASS_RACEBOX;
+    pkt.id  = UBX_ID_ERASE;
+    pkt.len = 0;
+    if (_ble.sendCommand(pkt)) {
+        _isErasing     = true;
+        _eraseProgress = 0;
+        _cmdSentMs     = millis();
+        Serial.println("[Recorder] Erase started — this may take several minutes");
+    }
+}
+
 // ── _sendConfig() ─────────────────────────────────────────────────────────────
 // REC CONFIG (0xFF/0x25) — 12-byte payload per protocol rev 8:
 //   [0]     Enable (1=start, 0=stop)
@@ -178,7 +215,16 @@ void RaceBoxRecorder::_onPacket(const UbxPacket& pkt) {
                             _pendingNoFix, _pendingAutoShutdown);
             } else if (pending == _Pending::STOP) {
                 _sendConfig(0x00, _dataRate, false, false, 0);
+            } else if (pending == _Pending::ERASE) {
+                _sendErase();
             }
+        } else if (pkt.len >= 2 && pkt.payload[0] == UBX_CLASS_RACEBOX
+                                && pkt.payload[1] == UBX_ID_ERASE) {
+            // Erase complete
+            _isErasing     = false;
+            _eraseProgress = 100;
+            Serial.println("[Recorder] Erase complete");
+            if (_eraseProgressCb) _eraseProgressCb(100);
         } else {
             Serial.println("[Recorder] ACK received");
         }
@@ -194,6 +240,16 @@ void RaceBoxRecorder::_onPacket(const UbxPacket& pkt) {
             Serial.println("[Recorder] Unlock NACK — wrong security code?");
         } else {
             Serial.println("[Recorder] NACK received");
+        }
+        break;
+
+    case UBX_ID_ERASE:
+        // 0xFF/0x24 with len=1: erase progress notification (0–100 %)
+        // (len=0 is the command we send; the device only sends len=1 notifications)
+        if (pkt.len == 1) {
+            _eraseProgress = pkt.payload[0];
+            Serial.printf("[Recorder] Erase progress: %d%%\n", (int)_eraseProgress);
+            if (_eraseProgressCb) _eraseProgressCb(_eraseProgress);
         }
         break;
 

@@ -8,6 +8,8 @@
  *   STATUS             Query recording status (state + record count)
  *   REC START [hz]     Start standalone recording (hz = 5|10|25, default 25)
  *   REC STOP           Stop standalone recording
+ *   ERASE              Erase all stored records (⚠ irreversible, takes minutes)
+ *   ERASE CANCEL       Cancel an ongoing erase
  *   RECBENCH           Auto-chain 3 sessions (10s / 30s / 60s) with live status
  *   RECBENCH STOP      Abort RECBENCH early
  *   DOWNLOAD           Download stored history (switches to downloader mode)
@@ -207,6 +209,17 @@ static void dispatch(const char* line) {
         rec.stopRecording();
         Serial.println("REC STOP sent");
 
+    } else if (strcmp(line, "ERASE") == 0) {
+        if (!racebox.isConnected()) { Serial.println("ERROR not connected"); return; }
+        if (_downloadMode) activateRecorder();
+        Serial.println("⚠  ERASE — erasing all stored records. This may take several minutes.");
+        Serial.println("   Send ERASE CANCEL to abort.");
+        rec.eraseMemory();
+
+    } else if (strcmp(line, "ERASE CANCEL") == 0) {
+        if (!rec.isErasing()) { Serial.println("No erase in progress"); return; }
+        rec.cancelErase();
+
     } else if (strcmp(line, "RECBENCH") == 0) {
         if (!racebox.isConnected()) { Serial.println("ERROR not connected"); return; }
         if (_benchRecState != BenchRecState::IDLE) {
@@ -244,7 +257,7 @@ static void dispatch(const char* line) {
 
     } else {
         Serial.printf("ERROR unknown command: %s\n", line);
-        Serial.println("Commands: PING  LIVE  RAWDUMP  FIFO  STATUS  REC START [hz]  REC STOP  DOWNLOAD  RECBENCH  RECBENCH STOP");
+        Serial.println("Commands: PING  LIVE  RAWDUMP  FIFO  STATUS  REC START [hz]  REC STOP  ERASE  ERASE CANCEL  DOWNLOAD  RECBENCH  RECBENCH STOP");
     }
 }
 
@@ -262,6 +275,13 @@ void setup() {
     racebox.begin();
     rec.setSecurityCode(SECURITY_CODE);
     rec.begin();  // default: recorder mode
+
+    rec.setEraseProgressCallback([](uint8_t pct) {
+        if (pct < 100)
+            Serial.printf("[ERASE] %d%% ...\n", (int)pct);
+        else
+            Serial.println("[ERASE] Complete ✓ — memory erased. Run STATUS to confirm.");
+    });
 
     rec.setStateChangeCallback([](StateChangeEvent ev) {
         const char* evStr;

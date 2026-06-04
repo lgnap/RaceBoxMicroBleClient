@@ -289,6 +289,99 @@ void test_start_with_filters_encodes_correctly() {
     TEST_ASSERT_EQUAL_HEX8(0x01, g_stubLastSent.payload[11]);
 }
 
+// ── Erase ─────────────────────────────────────────────────────────────────────
+
+static UbxPacket makeEraseAck() {
+    UbxPacket p{};
+    p.cls = UBX_CLASS_RACEBOX;
+    p.id  = UBX_ID_ACK;
+    p.len = 2;
+    p.payload[0] = UBX_CLASS_RACEBOX;
+    p.payload[1] = UBX_ID_ERASE;
+    return p;
+}
+
+static UbxPacket makeEraseProgress(uint8_t pct) {
+    UbxPacket p{};
+    p.cls        = UBX_CLASS_RACEBOX;
+    p.id         = UBX_ID_ERASE;
+    p.len        = 1;
+    p.payload[0] = pct;
+    return p;
+}
+
+void test_erase_sends_unlock_then_erase_command() {
+    RaceBoxBle ble;
+    RaceBoxRecorder rec(ble);
+    rec.begin();
+    rec.eraseMemory();
+    // Step 1: unlock sent
+    TEST_ASSERT_EQUAL_HEX8(UBX_ID_MEM_UNLOCK, g_stubLastSent.id);
+    TEST_ASSERT_FALSE(rec.isErasing());  // not yet — waiting for unlock ACK
+    // Step 2: simulate unlock ACK → erase command sent
+    rec._onPacket(makeUnlockAck());
+    TEST_ASSERT_EQUAL_HEX8(UBX_ID_ERASE, g_stubLastSent.id);
+    TEST_ASSERT_EQUAL(0, g_stubLastSent.len);  // empty payload = start
+    TEST_ASSERT_TRUE(rec.isErasing());
+}
+
+void test_erase_progress_callback_fires() {
+    RaceBoxBle ble;
+    RaceBoxRecorder rec(ble);
+    rec.begin();
+    uint8_t captured = 0xFF;
+    rec.setEraseProgressCallback([&](uint8_t pct) { captured = pct; });
+    // Inject a progress notification (59%)
+    rec._onPacket(makeEraseProgress(59));
+    TEST_ASSERT_EQUAL(59, captured);
+    TEST_ASSERT_EQUAL(59, rec.eraseProgress());
+}
+
+void test_erase_complete_on_erase_ack() {
+    RaceBoxBle ble;
+    RaceBoxRecorder rec(ble);
+    rec.begin();
+    rec.eraseMemory();
+    rec._onPacket(makeUnlockAck());  // start erase
+    TEST_ASSERT_TRUE(rec.isErasing());
+
+    bool doneFired = false;
+    rec.setEraseProgressCallback([&](uint8_t pct) {
+        if (pct == 100) doneFired = true;
+    });
+    rec._onPacket(makeEraseAck());
+    TEST_ASSERT_FALSE(rec.isErasing());
+    TEST_ASSERT_EQUAL(100, rec.eraseProgress());
+    TEST_ASSERT_TRUE(doneFired);
+}
+
+void test_cancel_erase_sends_erase_with_payload() {
+    RaceBoxBle ble;
+    RaceBoxRecorder rec(ble);
+    rec.begin();
+    rec.eraseMemory();
+    rec._onPacket(makeUnlockAck());  // start erase
+    TEST_ASSERT_TRUE(rec.isErasing());
+
+    stubBleReset();
+    rec.cancelErase();
+    TEST_ASSERT_FALSE(rec.isErasing());
+    TEST_ASSERT_EQUAL_HEX8(UBX_ID_ERASE, g_stubLastSent.id);
+    TEST_ASSERT_EQUAL(1, g_stubLastSent.len);  // 1-byte payload = cancel
+}
+
+void test_erase_not_started_twice() {
+    RaceBoxBle ble;
+    RaceBoxRecorder rec(ble);
+    rec.begin();
+    rec.eraseMemory();
+    rec._onPacket(makeUnlockAck());
+    TEST_ASSERT_TRUE(rec.isErasing());
+    int countBefore = g_stubSendCount;
+    rec.eraseMemory();  // second call — must be ignored
+    TEST_ASSERT_EQUAL(countBefore, g_stubSendCount);
+}
+
 // ── Runner ────────────────────────────────────────────────────────────────────
 int main() {
     UNITY_BEGIN();
@@ -313,5 +406,10 @@ int main() {
     RUN_TEST(test_start_recording_sends_unlock_then_config);
     RUN_TEST(test_stop_recording_sends_unlock_then_stop);
     RUN_TEST(test_start_with_filters_encodes_correctly);
+    RUN_TEST(test_erase_sends_unlock_then_erase_command);
+    RUN_TEST(test_erase_progress_callback_fires);
+    RUN_TEST(test_erase_complete_on_erase_ack);
+    RUN_TEST(test_cancel_erase_sends_erase_with_payload);
+    RUN_TEST(test_erase_not_started_twice);
     return UNITY_END();
 }
