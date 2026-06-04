@@ -13,8 +13,12 @@ static const char* RACEBOX_SERVICE_UUID = "6E400001-B5A3-F393-E0A9-E50E24DCCA9E"
 static const char* RACEBOX_RX_UUID      = "6E400002-B5A3-F393-E0A9-E50E24DCCA9E";  // client → device
 static const char* RACEBOX_TX_UUID      = "6E400003-B5A3-F393-E0A9-E50E24DCCA9E";  // device → client
 
-// FIFO size — enough for ~5 complete UBX frames (88 bytes each)
-static constexpr size_t RACEBOX_FIFO_SIZE = 512;
+// FIFO size — enough for a burst of history records during download.
+// A full BLE notification is 244 bytes (~2-3 records of 88 bytes each).
+// The device sends at full BLE throughput (~100 kbps) during download.
+// 4096 bytes ≈ 46 records of headroom; covers ~320 ms at full download speed
+// with a fast callback. Increase if your callback blocks (e.g. SD writes > 300ms).
+static constexpr size_t RACEBOX_FIFO_SIZE = 4096;
 
 // ── Callbacks ─────────────────────────────────────────────────────────────────
 // Called with each parsed live-data record (0xFF/0x01).

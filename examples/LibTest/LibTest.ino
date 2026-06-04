@@ -79,13 +79,19 @@ RaceBoxRecorder rec(racebox);
 static constexpr uint32_t SECURITY_CODE = 123456;
 
 // ── Downloader (activated on DOWNLOAD command) ───────────────────────────────
+// Print 1 record out of DL_PRINT_EVERY to avoid FIFO overflow.
+// Printing every record at 115200 baud (~7 ms/line × 25 records/s = overflow).
+static constexpr uint32_t DL_PRINT_EVERY = 100;
+
 RaceBoxDownloader dl(racebox, [](const RaceBoxData& d, uint32_t index) {
-    Serial.printf("[DL %5lu] %04d-%02d-%02d %02d:%02d:%02d | "
-                  "lat=%.7f lon=%.7f spd=%.1fkm/h\n",
-                  (unsigned long)index,
-                  d.year, d.month, d.day,
-                  d.hour, d.minute, d.second,
-                  d.latitude, d.longitude, d.speed);
+    if (index % DL_PRINT_EVERY == 0) {
+        Serial.printf("[DL %5lu] %04d-%02d-%02d %02d:%02d:%02d | "
+                      "lat=%.7f lon=%.7f spd=%.1fkm/h\n",
+                      (unsigned long)index,
+                      d.year, d.month, d.day,
+                      d.hour, d.minute, d.second,
+                      d.latitude, d.longitude, d.speed);
+    }
 });
 
 // ── Raw packet debug dump ─────────────────────────────────────────────────────
