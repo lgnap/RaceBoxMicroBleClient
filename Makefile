@@ -68,12 +68,9 @@ flash: _check-sketch
 monitor:
 	$(ARDUINO_CLI) monitor --port $(PORT) --config baudrate=$(BAUD)
 
-# ── Internal guard ────────────────────────────────────────────────────────────
+# ── Internal guard (pure make — no shell needed) ──────────────────────────────
 _check-sketch:
-	@if [ ! -f "$(SKETCH_FILE)" ]; then \
-	  echo "ERROR: $(SKETCH_FILE) not found."; \
-	  exit 1; \
-	fi
+	$(if $(wildcard $(SKETCH_FILE)),,$(error Sketch not found: $(SKETCH_FILE). Available: $(notdir $(wildcard examples/*/*))))
 
 # ── Help ──────────────────────────────────────────────────────────────────────
 help:
