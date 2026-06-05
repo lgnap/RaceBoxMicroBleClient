@@ -46,6 +46,10 @@ public:
     // Number of bytes currently buffered.
     size_t available() const { return _len; }
 
+    // Discard all buffered bytes. Call on BLE disconnect to prevent stale data
+    // from a previous session being parsed in the next connection.
+    void clear();
+
     // Cumulative bytes dropped due to FIFO overflow since construction.
     uint32_t overflowCount() const { return _overflowCount; }
 

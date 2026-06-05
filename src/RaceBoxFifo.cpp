@@ -31,6 +31,15 @@ void RaceBoxFifo::push(const uint8_t* data, size_t len) {
     if (overflowed && _overflowCb) _overflowCb(_overflowCount);
 }
 
+// ── clear() ───────────────────────────────────────────────────────────────────
+void RaceBoxFifo::clear() {
+    xSemaphoreTake(_mutex, portMAX_DELAY);
+    _head = 0;
+    _tail = 0;
+    _len  = 0;
+    xSemaphoreGive(_mutex);
+}
+
 // ── extractFrame() ────────────────────────────────────────────────────────────
 bool RaceBoxFifo::extractFrame(uint8_t* frame, size_t& frameLen) {
     if (_mutex == nullptr) { frameLen = 0; return false; }

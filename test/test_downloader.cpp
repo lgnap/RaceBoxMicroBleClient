@@ -56,7 +56,10 @@ static UbxPacket makeNack() {
     UbxPacket p{};
     p.cls = UBX_CLASS_RACEBOX;
     p.id  = UBX_ID_NACK;
-    p.len = 0;
+    // Payload must identify the NACKed command: [class=0xFF, id=0x23 (download)]
+    p.payload[0] = UBX_CLASS_RACEBOX;
+    p.payload[1] = UBX_ID_DOWNLOAD;
+    p.len = 2;
     return p;
 }
 

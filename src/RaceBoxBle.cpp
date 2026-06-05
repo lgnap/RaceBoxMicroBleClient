@@ -66,6 +66,12 @@ void RaceBoxBle::update() {
     if (_doConnect && targetFound) {
         _doConnect = false;
 
+        // Delete any lingering NimBLE client from the previous session.
+        // createClient() adds a new entry; without this the old disconnected
+        // client stays in NimBLE's list and can cause GATT handle confusion.
+        NimBLEClient* stale = NimBLEDevice::getClientByPeerAddress(targetAddr);
+        if (stale) NimBLEDevice::deleteClient(stale);
+
         NimBLEClient* client = NimBLEDevice::createClient();
         client->setClientCallbacks(&clientCb, false);
 
@@ -142,6 +148,9 @@ void RaceBoxBle::_handleDisconnect() {
     _connected = false;
     _rxChar    = nullptr;
     _doScan    = true;
+    // Discard any stale bytes from the previous session so they are not
+    // mistakenly parsed as packets on the next connection.
+    _fifo.clear();
     _debug("[BLE] Disconnected, re-scanning...");
 }
 
