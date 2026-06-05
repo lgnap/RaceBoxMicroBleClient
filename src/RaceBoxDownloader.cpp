@@ -90,8 +90,21 @@ void RaceBoxDownloader::_onPacket(const UbxPacket& pkt) {
         break;
 
     case UBX_ID_NACK:
-        Serial.println("[Downloader] NACK — download failed");
-        _state = State::ERROR;
+        // Only treat as download failure if this NACK is specifically for the
+        // download trigger (0xFF/0x23). Ignore NACKs for other commands (e.g.
+        // stale responses left in the BLE FIFO from a previous command).
+        if (_state == State::REQUESTED &&
+            pkt.len >= 2 &&
+            pkt.payload[0] == UBX_CLASS_RACEBOX &&
+            pkt.payload[1] == UBX_ID_DOWNLOAD) {
+            Serial.println("[Downloader] NACK — download refused by device");
+            _state = State::ERROR;
+        } else {
+            Serial.printf("[Downloader] Ignored NACK (cls=0x%02X id=0x%02X, state=%d)\n",
+                          pkt.len >= 1 ? pkt.payload[0] : 0,
+                          pkt.len >= 2 ? pkt.payload[1] : 0,
+                          (int)_state);
+        }
         break;
 
     default:
