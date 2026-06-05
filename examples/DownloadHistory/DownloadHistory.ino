@@ -12,6 +12,7 @@
  */
 #include <RaceBoxBle.h>
 #include <RaceBoxDownloader.h>
+#include "secrets.h"  // defines RACEBOX_SECURITY_CODE — copy secrets.h.example and edit
 
 RaceBoxBle racebox(nullptr);  // no live-data callback needed for download
 
@@ -35,6 +36,7 @@ void setup() {
         delay(100);
     }
     Serial.println("Connected! Starting download...");
+    downloader.setSecurityCode(RACEBOX_SECURITY_CODE);
     downloader.begin();
 }
 

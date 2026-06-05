@@ -19,6 +19,7 @@
 
 #include <RaceBoxBle.h>
 #include <RaceBoxDownloader.h>
+#include "secrets.h"  // defines RACEBOX_SECURITY_CODE — copy secrets.h.example and edit
 
 // ── Serial line buffer ────────────────────────────────────────────────────────
 static char    lineBuf[64];
@@ -104,6 +105,7 @@ void setup() {
     Serial.println("Commands: PING  FIFO  DOWNLOAD");
     Serial.println("Verifies FIFO integrity: overflow=0 means no data was dropped.");
 
+    dl.setSecurityCode(RACEBOX_SECURITY_CODE);
     racebox.setDebugCallback([](const char* msg) { Serial.println(msg); });
     racebox.setOverflowCallback([](uint32_t dropped) {
         // Called from NimBLE task — keep it short
