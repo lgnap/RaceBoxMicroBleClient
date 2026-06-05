@@ -3,3 +3,6 @@
 *.o
 *.d
 build/
+
+# Local secrets — never commit
+secrets.h

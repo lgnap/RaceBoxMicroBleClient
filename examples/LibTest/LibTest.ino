@@ -51,6 +51,7 @@
 #include <RaceBoxBle.h>
 #include <RaceBoxRecorder.h>
 #include <RaceBoxDownloader.h>
+#include "secrets.h"  // defines RACEBOX_SECURITY_CODE — copy secrets.h.example and edit
 
 // ── Serial line buffer ────────────────────────────────────────────────────────
 static constexpr size_t LINE_BUF = 64;
@@ -136,7 +137,7 @@ RaceBoxBle racebox(onLiveData);
 // Set your device's security code (RaceBox factory default: 123456).
 // The Recorder sends unlock automatically before every REC START / REC STOP.
 RaceBoxRecorder rec(racebox);
-static constexpr uint32_t SECURITY_CODE = 123456;
+static constexpr uint32_t SECURITY_CODE = RACEBOX_SECURITY_CODE;
 
 // ── Downloader (activated on DOWNLOAD command) ───────────────────────────────
 // Print 1 record out of DL_PRINT_EVERY to avoid FIFO overflow.
