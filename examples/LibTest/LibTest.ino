@@ -14,6 +14,8 @@
  *   RECBENCH STOP      Abort RECBENCH early
  *   CONFIG TEST        Verify config is preserved across stop/start (no re-send)
  *   CONFIG VERIFY      Single-shot: use stored config, start, print confirmed config
+ *   WATCH              Passive listener: print confirmed config on any recording start
+ *   WATCH OFF          Stop WATCH mode
  *   DOWNLOAD           Download stored history (switches to downloader mode)
  *   LIVE               Toggle live data printing ON/OFF
  *   RAWDUMP            Toggle raw UBX packet hex dump (protocol debugging)
@@ -59,6 +61,7 @@ static uint8_t linePos = 0;
 static bool _liveEnabled   = true;   // print live GPS data
 static bool _downloadMode  = false;  // true while downloader is active
 static bool _downloadDone  = false;
+static bool _watchMode     = false;  // WATCH: passive listener for button-initiated recordings
 
 // ── CONFIG TEST / CONFIG VERIFY state machine ─────────────────────────────────
 // CONFIG TEST: explicit config → start → stop → no-args start → compare confirmed configs
@@ -270,6 +273,17 @@ static void dispatch(const char* line) {
             Serial.println("[RECBENCH] Aborted");
         }
 
+    } else if (strcmp(line, "WATCH") == 0) {
+        if (_downloadMode) activateRecorder();
+        _watchMode = true;
+        Serial.println("[WATCH] Listening — press the RaceBox button (or start recording via BLE).");
+        Serial.println("[WATCH] Confirmed config will be printed on each recording start.");
+        Serial.println("[WATCH] Send WATCH OFF to stop.");
+
+    } else if (strcmp(line, "WATCH OFF") == 0) {
+        _watchMode = false;
+        Serial.println("[WATCH] Disabled.");
+
     } else if (strcmp(line, "CONFIG TEST") == 0) {
         if (!racebox.isConnected()) { Serial.println("ERROR not connected"); return; }
         if (_cfgTestPhase != ConfigTestPhase::IDLE) {
@@ -307,7 +321,7 @@ static void dispatch(const char* line) {
         Serial.printf("ERROR unknown command: %s\n", line);
         Serial.println("Commands: PING  LIVE  RAWDUMP  FIFO  STATUS  REC START [hz]  REC STOP");
         Serial.println("          ERASE  ERASE CANCEL  RECBENCH  RECBENCH STOP");
-        Serial.println("          CONFIG TEST  CONFIG VERIFY  DOWNLOAD");
+        Serial.println("          CONFIG TEST  CONFIG VERIFY  WATCH  WATCH OFF  DOWNLOAD");
     }
 }
 
@@ -318,7 +332,7 @@ void setup() {
     Serial.println("=== RaceBoxMicroBleClient LibTest ===");
     Serial.println("Commands: PING  LIVE  RAWDUMP  FIFO  STATUS  REC START [hz]  REC STOP");
     Serial.println("          ERASE  ERASE CANCEL  RECBENCH  RECBENCH STOP");
-    Serial.println("          CONFIG TEST  CONFIG VERIFY  DOWNLOAD");
+    Serial.println("          CONFIG TEST  CONFIG VERIFY  WATCH  WATCH OFF  DOWNLOAD");
 
     racebox.setDebugCallback([](const char* msg) { Serial.println(msg); });
     racebox.setErrorCallback([](uint32_t count) {
@@ -339,7 +353,7 @@ void setup() {
             Serial.println("[ERASE] Complete ✓ — memory erased. Run STATUS to confirm.");
     });
 
-    // Capture confirmed config for CONFIG TEST / CONFIG VERIFY
+    // Capture confirmed config for CONFIG TEST / CONFIG VERIFY / WATCH
     rec.setConfigConfirmedCallback([](const RecordingConfig& c) {
         if (_cfgTestPhase == ConfigTestPhase::CT_WAIT_START1) {
             _cfgConfirmed1 = c;
@@ -347,6 +361,23 @@ void setup() {
             _cfgConfirmed2 = c;
         } else if (_cfgTestPhase == ConfigTestPhase::CV_WAIT_START) {
             _cfgCaptured = c;
+        }
+
+        // WATCH mode: always print confirmed config on any recording start
+        if (_watchMode) {
+            Serial.println("[WATCH] === Recording started ===");
+            Serial.printf("[WATCH] Rate             : %d Hz\n", (int)c.rate);
+            Serial.printf("[WATCH] StationaryFilter : %s", c.stationaryFilter ? "yes" : "no");
+            if (c.stationaryFilter)
+                Serial.printf(" (speed<%u mm/s, interval=%u s)",
+                              c.stationarySpeedMmS, c.stationaryIntervalS);
+            Serial.println();
+            Serial.printf("[WATCH] NoFixFilter      : %s", c.noFixFilter ? "yes" : "no");
+            if (c.noFixFilter)
+                Serial.printf(" (interval=%u s)", c.noFixIntervalS);
+            Serial.println();
+            Serial.printf("[WATCH] AutoShutdown     : %u s\n", c.autoShutdownSecs);
+            Serial.println("[WATCH] ================================");
         }
     });
 
