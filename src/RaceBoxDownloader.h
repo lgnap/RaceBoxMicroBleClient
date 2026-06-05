@@ -64,6 +64,10 @@ public:
     // Optional: notified of recording session boundaries (start/stop/pause/resume)
     void setStateChangeCallback(DownloadStateChangeCallback cb) { _stateChangeCb = std::move(cb); }
 
+    // Send 0xFF/0x24 to erase stored history on the device.
+    // Only call after isDone() — i.e. the download completed successfully.
+    void eraseMemory();
+
     bool     isDone()          const { return _state == State::DONE; }
     bool     isError()         const { return _state == State::ERROR; }
     uint32_t recordCount()     const { return _recordCount; }

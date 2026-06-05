@@ -59,6 +59,19 @@ bool RaceBoxDownloader::_sendDownloadTrigger() {
     }
 }
 
+// ── eraseMemory() ─────────────────────────────────────────────────────────────
+void RaceBoxDownloader::eraseMemory() {
+    UbxPacket cmd{};
+    cmd.cls = UBX_CLASS_RACEBOX;
+    cmd.id  = UBX_ID_ERASE;
+    cmd.len = 0;
+    if (_ble.sendCommand(cmd)) {
+        Serial.println("[Downloader] Erase command sent (0xFF/0x24)");
+    } else {
+        Serial.println("[Downloader] Failed to send erase command");
+    }
+}
+
 // ── update() — timeout watchdog ───────────────────────────────────────────────
 void RaceBoxDownloader::update() {
     if (_state == State::REQUESTED || _state == State::RECEIVING) {
