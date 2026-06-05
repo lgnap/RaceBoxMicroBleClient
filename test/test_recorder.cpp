@@ -404,6 +404,19 @@ void test_state_change_no_confirmed_callback_does_not_crash() {
     TEST_PASS();
 }
 
+void test_state_change_rate_zero_falls_back_to_sent_rate() {
+    // RaceBox Micro firmware quirk: byte[2] (rate) is 0 in STATE_CHANGE.
+    // Confirmed rate should fall back to the rate we sent (_config.rate).
+    RaceBoxBle ble;
+    RaceBoxRecorder rec(ble);
+    rec.begin();
+    rec.setConfig(DataRate::HZ_25, false, false, 0);
+    // Packet with rate byte = 0
+    UbxPacket pkt = makeStateChangeFull(1, /*rate=*/0, 0x00, 0, 0, 0, 0);
+    rec._onPacket(pkt);
+    TEST_ASSERT_EQUAL((int)DataRate::HZ_25, (int)rec.confirmedConfig().rate);
+}
+
 void test_state_change_short_payload_no_confirmed_update() {
     RaceBoxBle ble;
     RaceBoxRecorder rec(ble);
@@ -543,6 +556,7 @@ int main() {
     RUN_TEST(test_state_change_full_payload_fires_config_confirmed_callback);
     RUN_TEST(test_state_change_stop_does_not_update_confirmed_config);
     RUN_TEST(test_state_change_no_confirmed_callback_does_not_crash);
+    RUN_TEST(test_state_change_rate_zero_falls_back_to_sent_rate);
     RUN_TEST(test_state_change_short_payload_no_confirmed_update);
     RUN_TEST(test_erase_sends_unlock_then_erase_command);
     RUN_TEST(test_erase_progress_callback_fires);

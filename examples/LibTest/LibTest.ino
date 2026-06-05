@@ -96,7 +96,8 @@ static constexpr uint32_t BENCH_BETWEEN_MS   = 500;   // pause between sessions
 static BenchRecState _benchRecState      = BenchRecState::IDLE;
 static uint8_t       _benchRecSession    = 0;   // current session index (0-based)
 static uint32_t      _benchRecStartMs    = 0;   // millis() when current phase began
-static uint32_t      _benchRecordsAtSessionStart = 0;  // record count at session start (from STATUS)
+static uint32_t      _benchRecordsAtSessionStart = 0;  // total records before this session
+static bool          _benchRecBaseSet    = false;  // true once baseline is captured via first STATUS
 static uint32_t      _benchRecLastStatusMs = 0; // millis() of last STATUS query during RECBENCH
 static constexpr uint32_t BENCH_STATUS_INTERVAL_MS = 5000;  // query STATUS every 5s during recording
 
@@ -248,6 +249,7 @@ static void dispatch(const char* line) {
         }
         if (_downloadMode) activateRecorder();
         _benchRecSession = 0;
+        _benchRecBaseSet = false;
         _benchRecState   = BenchRecState::STARTING;
         Serial.printf("[RECBENCH] Starting — %u sessions: ", BENCH_SESSION_COUNT);
         for (uint8_t i = 0; i < BENCH_SESSION_COUNT; i++) {
@@ -445,10 +447,11 @@ void setup() {
             ev == StateChangeEvent::RECORDING_START) {
             uint32_t durMs = BENCH_SESSION_DURATIONS_MS[_benchRecSession];
             _benchRecStartMs = millis();
-            // Snapshot current count and immediately query to get fresh value
+            // Baseline will be set on first STATUS response (not yet available here)
             _benchRecordsAtSessionStart = rec.recordCount();
+            _benchRecBaseSet    = false;  // first STATUS during this session sets the real baseline
             _benchRecLastStatusMs = millis();
-            rec.queryStatus();  // will update rec.recordCount() async; snapshot updated below when response arrives
+            rec.queryStatus();
             Serial.printf("[RECBENCH] Session %u/%u — recording for %lu s (querying STATUS...)\n",
                           _benchRecSession + 1, BENCH_SESSION_COUNT,
                           (unsigned long)(durMs / 1000));
@@ -568,10 +571,11 @@ void loop() {
         static uint32_t lastCount = 0;
         if (rec.state() != lastState || rec.recordCount() != lastCount) {
             uint32_t newCount = rec.recordCount();
-            // RECBENCH: update session baseline on first STATUS after session start
-            // (queryStatus() was sent right after RECORDING_START; this is the response)
-            if (_benchRecState == BenchRecState::RECORDING && lastCount == _benchRecordsAtSessionStart) {
+            // RECBENCH: capture baseline from first STATUS after session start.
+            // _benchRecBaseSet prevents the baseline from drifting on subsequent STATUSes.
+            if (_benchRecState == BenchRecState::RECORDING && !_benchRecBaseSet) {
                 _benchRecordsAtSessionStart = newCount;
+                _benchRecBaseSet = true;
             }
             lastState = rec.state();
             lastCount = newCount;

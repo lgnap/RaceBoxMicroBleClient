@@ -287,10 +287,18 @@ void RaceBoxRecorder::_onPacket(const UbxPacket& pkt) {
             }
 
             // Parse full confirmed config (recording-start only: state == 1)
+            // Note: RaceBox Micro firmware does not echo byte[2] (data rate) —
+            // it stays 0. All other fields (flags, thresholds) are populated.
             if (pkt.payload[0] == 1 && pkt.len >= 12) {
                 uint8_t flags = pkt.payload[3];
 
-                _confirmedConfig.rate             = static_cast<DataRate>(pkt.payload[2]);
+                // Rate byte [2] is unreliable on some firmware versions (stays 0).
+                // Fall back to the sent rate when device reports 0.
+                uint8_t reportedRate = pkt.payload[2];
+                _confirmedConfig.rate = (reportedRate != 0)
+                    ? static_cast<DataRate>(reportedRate)
+                    : _config.rate;
+
                 _confirmedConfig.stationaryFilter = (flags >> 1) & 0x01;
                 _confirmedConfig.noFixFilter      = (flags >> 2) & 0x01;
                 _confirmedConfig.autoShutdownMin  = (flags >> 3) & 0x01;  // bool presence only
@@ -308,20 +316,13 @@ void RaceBoxRecorder::_onPacket(const UbxPacket& pkt) {
                     static_cast<uint16_t>(pkt.payload[10]) |
                     (static_cast<uint16_t>(pkt.payload[11]) << 8);
 
-                Serial.printf("[Recorder] Confirmed config: rate=%d flags=0x%02X "
+                Serial.printf("[Recorder] Confirmed config: flags=0x%02X "
                               "statSpd=%u statInt=%u noFixInt=%u shutdownSecs=%u\n",
-                              (int)_confirmedConfig.rate, flags,
+                              flags,
                               _confirmedConfig.stationarySpeedMmS,
                               _confirmedConfig.stationaryIntervalS,
                               _confirmedConfig.noFixIntervalS,
                               _confirmedConfig.autoShutdownSecs);
-
-                // Warn on rate mismatch (filters cannot be compared directly —
-                // device may apply different thresholds than we suggested)
-                if (_confirmedConfig.rate != _config.rate) {
-                    Serial.printf("[Recorder] WARNING rate mismatch: sent=%d confirmed=%d\n",
-                                  (int)_config.rate, (int)_confirmedConfig.rate);
-                }
 
                 if (_configConfirmedCb) _configConfirmedCb(_confirmedConfig);
             }
