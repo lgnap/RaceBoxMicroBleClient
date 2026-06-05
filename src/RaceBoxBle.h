@@ -105,6 +105,12 @@ public:
     // Returns false if not connected or the characteristic is unavailable.
     bool sendCommand(const UbxPacket& pkt);
 
+    // Disconnect from the current device. The library will automatically
+    // re-scan and reconnect. Use this to force a clean connection state
+    // before triggering a history download (some devices refuse download
+    // while live-data streaming is active).
+    void disconnect();
+
     // ── NimBLE bridge (public so static callbacks can call them) ─────────────
     static RaceBoxBle* _instance;
     void _handleNotification(const uint8_t* data, size_t len);

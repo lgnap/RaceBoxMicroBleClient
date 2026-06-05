@@ -117,6 +117,14 @@ void RaceBoxBle::update() {
     _drainFifo();
 }
 
+// ── disconnect() ─────────────────────────────────────────────────────────────
+void RaceBoxBle::disconnect() {
+    if (!_connected) return;
+    NimBLEClient* client = NimBLEDevice::getClientByPeerAddress(targetAddr);
+    if (client) client->disconnect();
+    // _handleDisconnect() will fire asynchronously, set _connected=false and _doScan=true
+}
+
 // ── sendCommand() ─────────────────────────────────────────────────────────────
 bool RaceBoxBle::sendCommand(const UbxPacket& pkt) {
     if (!_connected || !_rxChar) return false;
