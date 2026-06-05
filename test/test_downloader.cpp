@@ -329,6 +329,112 @@ void test_no_error_just_before_timeout() {
     TEST_ASSERT_FALSE(dl.isError());
 }
 
+// ── Security code / memory unlock (0xFF/0x30) ─────────────────────────────────
+
+static UbxPacket makeUnlockAck() {
+    UbxPacket p{};
+    p.cls = UBX_CLASS_RACEBOX;
+    p.id  = UBX_ID_ACK;
+    p.len = 2;
+    p.payload[0] = UBX_CLASS_RACEBOX;
+    p.payload[1] = UBX_ID_MEM_UNLOCK;
+    return p;
+}
+
+static UbxPacket makeUnlockNack() {
+    UbxPacket p{};
+    p.cls = UBX_CLASS_RACEBOX;
+    p.id  = UBX_ID_NACK;
+    p.len = 2;
+    p.payload[0] = UBX_CLASS_RACEBOX;
+    p.payload[1] = UBX_ID_MEM_UNLOCK;
+    return p;
+}
+
+void test_no_security_code_sends_download_trigger() {
+    // Without a security code, begin() must send 0xFF/0x23 directly.
+    RaceBoxBle ble;
+    RaceBoxDownloader dl(ble, nullptr);
+    dl.begin();
+    TEST_ASSERT_EQUAL_HEX8(UBX_ID_DOWNLOAD, g_stubLastSent.id);
+    TEST_ASSERT_EQUAL(1, g_stubSendCount);
+}
+
+void test_security_code_sends_unlock_first() {
+    // With a security code, begin() must send 0xFF/0x30 (unlock) first.
+    RaceBoxBle ble;
+    RaceBoxDownloader dl(ble, nullptr);
+    dl.setSecurityCode(123456);
+    dl.begin();
+    TEST_ASSERT_EQUAL_HEX8(UBX_ID_MEM_UNLOCK, g_stubLastSent.id);
+    TEST_ASSERT_EQUAL(1, g_stubSendCount);
+}
+
+void test_security_code_payload_little_endian() {
+    // Payload must be 4-byte LE encoding of the security code.
+    RaceBoxBle ble;
+    RaceBoxDownloader dl(ble, nullptr);
+    dl.setSecurityCode(0x01020304u);
+    dl.begin();
+    TEST_ASSERT_EQUAL_HEX8(0x04, g_stubLastSent.payload[0]);
+    TEST_ASSERT_EQUAL_HEX8(0x03, g_stubLastSent.payload[1]);
+    TEST_ASSERT_EQUAL_HEX8(0x02, g_stubLastSent.payload[2]);
+    TEST_ASSERT_EQUAL_HEX8(0x01, g_stubLastSent.payload[3]);
+    TEST_ASSERT_EQUAL(4, g_stubLastSent.len);
+}
+
+void test_unlock_ack_sends_download_trigger() {
+    // After ACK for 0xFF/0x30, the downloader must send 0xFF/0x23.
+    RaceBoxBle ble;
+    RaceBoxDownloader dl(ble, nullptr);
+    dl.setSecurityCode(123456);
+    dl.begin();
+    // Now inject the unlock ACK
+    dl._onPacket(makeUnlockAck());
+    TEST_ASSERT_EQUAL(2, g_stubSendCount);  // unlock + download trigger
+    TEST_ASSERT_EQUAL_HEX8(UBX_ID_DOWNLOAD, g_stubLastSent.id);
+    TEST_ASSERT_FALSE(dl.isError());
+}
+
+void test_unlock_nack_sets_error() {
+    // NACK for 0xFF/0x30 means wrong security code — must go to ERROR.
+    RaceBoxBle ble;
+    RaceBoxDownloader dl(ble, nullptr);
+    dl.setSecurityCode(999999);
+    dl.begin();
+    dl._onPacket(makeUnlockNack());
+    TEST_ASSERT_TRUE(dl.isError());
+    TEST_ASSERT_EQUAL(1, g_stubSendCount);  // only the unlock was sent
+}
+
+void test_unlock_ack_then_download_response_receives_records() {
+    // Full flow: unlock ACK → download trigger → download response → records
+    RaceBoxBle ble;
+    uint32_t count = 0;
+    RaceBoxDownloader dl(ble, [&](const RaceBoxData&, uint32_t) { count++; });
+    dl.setSecurityCode(123456);
+    dl.begin();
+    dl._onPacket(makeUnlockAck());
+    dl._onPacket(makeDownloadResponse(3));
+    dl._onPacket(makeHistoryRecord());
+    dl._onPacket(makeHistoryRecord());
+    dl._onPacket(makeHistoryRecord());
+    dl._onPacket(makeDownloadAck());
+    TEST_ASSERT_EQUAL(3u, count);
+    TEST_ASSERT_TRUE(dl.isDone());
+}
+
+void test_reset_security_code_to_zero_disables_unlock() {
+    // setSecurityCode(0) must disable unlock (back to direct trigger).
+    RaceBoxBle ble;
+    RaceBoxDownloader dl(ble, nullptr);
+    dl.setSecurityCode(123456);
+    dl.setSecurityCode(0);
+    dl.begin();
+    TEST_ASSERT_EQUAL_HEX8(UBX_ID_DOWNLOAD, g_stubLastSent.id);
+    TEST_ASSERT_EQUAL(1, g_stubSendCount);
+}
+
 // ── Runner ────────────────────────────────────────────────────────────────────
 int main() {
     UNITY_BEGIN();
@@ -356,5 +462,12 @@ int main() {
     RUN_TEST(test_progress_caps_at_100);
     RUN_TEST(test_timeout_sets_error_after_30s);
     RUN_TEST(test_no_error_just_before_timeout);
+    RUN_TEST(test_no_security_code_sends_download_trigger);
+    RUN_TEST(test_security_code_sends_unlock_first);
+    RUN_TEST(test_security_code_payload_little_endian);
+    RUN_TEST(test_unlock_ack_sends_download_trigger);
+    RUN_TEST(test_unlock_nack_sets_error);
+    RUN_TEST(test_unlock_ack_then_download_response_receives_records);
+    RUN_TEST(test_reset_security_code_to_zero_disables_unlock);
     return UNITY_END();
 }
