@@ -28,18 +28,49 @@ enum class DataRate : uint8_t {
 
 // State change events (0xFF/0x26, byte 0)
 enum class StateChangeEvent : uint8_t {
-    RECORDING_START = 1,
-    RECORDING_STOP  = 2,
-    RECORDING_PAUSE = 3,
+    RECORDING_START  = 1,
+    RECORDING_STOP   = 2,
+    RECORDING_PAUSE  = 3,
     RECORDING_RESUME = 4,
 };
 
-// Callback fired when a 0xFF/0x26 State Change packet arrives (during download).
+// ── RecordingConfig ───────────────────────────────────────────────────────────
+
+/**
+ * Recording configuration — both the desired config (set via setConfig / startRecording)
+ * and the config confirmed by the device (read back from 0xFF/0x26 STATE_CHANGE).
+ *
+ * The basic fields (rate, filters, shutdown) are used when sending commands.
+ * The _confirmed_ fields are populated when the device echoes the config back
+ * in a STATE_CHANGE start message, giving the actual values applied by the firmware.
+ */
+struct RecordingConfig {
+    // ── Desired / sent config ────────────────────────────────────────────────
+    DataRate rate              = DataRate::HZ_25;
+    bool stationaryFilter      = false;  // suppress points when speed < threshold for interval
+    bool noFixFilter           = false;  // suppress points when no GPS fix for interval
+    uint8_t autoShutdownMin    = 0;      // 0=disabled; N=shutdown after N min of inactivity
+
+    // ── Confirmed by device (from STATE_CHANGE read-back) ────────────────────
+    // Zero until the first recording-start STATE_CHANGE is received.
+    uint16_t stationarySpeedMmS  = 0;   // confirmed speed threshold (mm/s)
+    uint16_t stationaryIntervalS = 0;   // confirmed stationary detection interval (s)
+    uint16_t noFixIntervalS      = 0;   // confirmed no-fix detection interval (s)
+    uint16_t autoShutdownSecs    = 0;   // confirmed auto-shutdown interval (s)
+};
+
+// ── Callbacks ─────────────────────────────────────────────────────────────────
+
+// Called when a 0xFF/0x26 State Change packet arrives.
 using StateChangeCallback = std::function<void(StateChangeEvent event)>;
 
-// Callback fired on each 0xFF/0x24 erase-progress notification (0–100 %).
+// Called on each 0xFF/0x24 erase-progress notification (0–100 %).
 // Also called with 100 when the final ACK arrives (erase complete).
 using EraseProgressCallback = std::function<void(uint8_t percent)>;
+
+// Called when a recording-start STATE_CHANGE confirms the applied config.
+// Use confirmedConfig() to read the full confirmed values.
+using ConfigConfirmedCallback = std::function<void(const RecordingConfig& confirmed)>;
 
 /**
  * Controls standalone recording on a RaceBox Mini S / Micro.
@@ -56,12 +87,18 @@ using EraseProgressCallback = std::function<void(uint8_t percent)>;
  *
  * Typical usage:
  *   RaceBoxRecorder rec(ble);
- *   rec.setSecurityCode(123456);   // once — handled automatically after this
+ *   rec.setSecurityCode(123456);
  *   rec.begin();
- *   rec.queryStatus();             // async — result available after update()
- *   rec.startRecording(DataRate::HZ_25);   // unlock sent automatically
+ *
+ *   // Option A — explicit config each call (backward compatible)
+ *   rec.startRecording(DataRate::HZ_25, true, true, 5);
+ *
+ *   // Option B — set once, reuse
+ *   rec.setConfig(DataRate::HZ_25, true, true, 5);
+ *   rec.startRecording();   // uses stored config
  *   ...
  *   rec.stopRecording();
+ *   rec.startRecording();   // same config, no need to repeat
  */
 class RaceBoxRecorder {
 public:
@@ -75,92 +112,99 @@ public:
 
     // ── Security code ─────────────────────────────────────────────────────────
 
-    // Set the memory security code (default: 123456).
-    // Once set, startRecording() and stopRecording() will automatically send
-    // the unlock command before the actual recording command.
-    // The lock resets on every BLE reconnection — the Recorder handles this.
     void setSecurityCode(uint32_t code) { _securityCode = code; }
+
+    // ── Recording config ──────────────────────────────────────────────────────
+
+    // Pre-configure without starting. Subsequent startRecording() calls
+    // (no-args form) will use this config.
+    void setConfig(DataRate rate,
+                   bool stationaryFilter = false,
+                   bool noFixFilter      = false,
+                   uint8_t autoShutdownMin = 0);
+
+    // Current stored config (updated by setConfig() and startRecording(rate,...)).
+    const RecordingConfig& config() const { return _config; }
+
+    // Config confirmed by the device after the last recording-start STATE_CHANGE.
+    // Zero until at least one recording session has started.
+    const RecordingConfig& confirmedConfig() const { return _confirmedConfig; }
 
     // ── Commands (async — result via lastAck() / state()) ────────────────────
 
     // Send 0xFF/0x22 to query recording status and record count.
-    // Results available after the device replies (check state/recordCount).
     void queryStatus();
 
-    // Send 0xFF/0x25 to start recording (preceded by auto-unlock if code is set).
-    // stationaryFilter: suppress points when stationary (speed < 1389 mm/s for 30s)
-    // noFixFilter:      suppress points when GPS fix lost for 30s
-    // autoShutdownMin:  0 = disabled; otherwise shut down after N minutes of inactivity
-    void startRecording(DataRate rate = DataRate::HZ_25,
+    // Start recording using the stored config (set via setConfig() or a previous
+    // startRecording(rate,...) call). Defaults to HZ_25/no-filters if never configured.
+    void startRecording();
+
+    // Start recording with an explicit config (also updates the stored config).
+    void startRecording(DataRate rate,
                         bool stationaryFilter = false,
-                        bool noFixFilter = false,
+                        bool noFixFilter      = false,
                         uint8_t autoShutdownMin = 0);
 
-    // Send 0xFF/0x25 with stop command (preceded by auto-unlock if code is set).
+    // Stop recording.
     void stopRecording();
 
     // Start a full memory erase (preceded by auto-unlock).
     // Progress reported via setEraseProgressCallback(). Can take several minutes.
-    // Refused if BLE is not connected or an erase is already in progress.
     void eraseMemory();
 
-    // Cancel an ongoing erase (sends 0xFF/0x24 with 1 byte).
-    // No-op if not erasing.
+    // Cancel an ongoing erase. No-op if not erasing.
     void cancelErase();
 
-    // ── State (updated asynchronously on receipt of device responses) ─────────
-    // state():       current recording state (from 0xFF/0x22 STATUS or 0xFF/0x26 STATE CHANGE)
-    // memoryLevel(): memory usage in percent 0..100 (from 0xFF/0x22 STATUS)
-    // recordCount(): number of stored records (from 0xFF/0x22 STATUS)
-    // dataRate():    last known recording data rate (from 0xFF/0x26 STATE CHANGE)
-    // lastAck():     true=last command ACKed, false=NACKed or timeout
-    RecordingState state()       const { return _state; }
-    uint8_t        memoryLevel() const { return _memoryLevel; }
-    uint32_t       recordCount() const { return _recordCount; }
-    uint32_t       memorySize()  const { return _memorySize; }
-    DataRate       dataRate()    const { return _dataRate; }
-    bool           lastAck()     const { return _lastAck; }  // true=ACK, false=NACK
-    bool           isErasing()   const { return _isErasing; }
+    // ── State ────────────────────────────────────────────────────────────────
+    RecordingState state()         const { return _state; }
+    uint8_t        memoryLevel()   const { return _memoryLevel; }
+    uint32_t       recordCount()   const { return _recordCount; }
+    uint32_t       memorySize()    const { return _memorySize; }
+    DataRate       dataRate()      const { return _dataRate; }
+    bool           lastAck()       const { return _lastAck; }
+    bool           isErasing()     const { return _isErasing; }
     uint8_t        eraseProgress() const { return _eraseProgress; }
 
-    // Optional: called when a 0xFF/0x26 State Change arrives (during download)
+    // ── Callbacks ─────────────────────────────────────────────────────────────
+
+    // Called on every 0xFF/0x26 STATE_CHANGE (start/stop/pause/resume).
     void setStateChangeCallback(StateChangeCallback cb) { _stateChangeCb = std::move(cb); }
 
-    // Optional: called on each erase progress notification (0–100 %) and on completion.
+    // Called when recording starts and the device confirms the applied config.
+    // Fires after the STATE_CHANGE is parsed — confirmedConfig() is already updated.
+    void setConfigConfirmedCallback(ConfigConfirmedCallback cb) { _configConfirmedCb = std::move(cb); }
+
+    // Called on each erase progress notification (0–100 %) and on completion.
     void setEraseProgressCallback(EraseProgressCallback cb) { _eraseProgressCb = std::move(cb); }
 
     // Called by RaceBoxBle packet callback — do not call directly.
     void _onPacket(const UbxPacket& pkt);
 
 private:
-    // Pending command type — queued while waiting for unlock ACK
     enum class _Pending : uint8_t { NONE, START, STOP, ERASE };
 
     RaceBoxBle&         _ble;
     RecordingState      _state       = RecordingState::UNKNOWN;
-    uint8_t             _memoryLevel = 0;     // memory usage % (from STATUS)
-    uint32_t            _recordCount = 0;     // stored records (from STATUS)
-    uint32_t            _memorySize  = 0;     // total capacity in records (from STATUS)
-    DataRate            _dataRate    = DataRate::HZ_25;  // from STATE CHANGE
+    uint8_t             _memoryLevel = 0;
+    uint32_t            _recordCount = 0;
+    uint32_t            _memorySize  = 0;
+    DataRate            _dataRate    = DataRate::HZ_25;
     bool                _lastAck     = false;
     uint32_t            _cmdSentMs   = 0;
-    StateChangeCallback   _stateChangeCb;
-    EraseProgressCallback _eraseProgressCb;
+
+    RecordingConfig          _config;            // desired / stored config
+    RecordingConfig          _confirmedConfig;   // last config confirmed by device
+    StateChangeCallback      _stateChangeCb;
+    ConfigConfirmedCallback  _configConfirmedCb;
+    EraseProgressCallback    _eraseProgressCb;
+
     bool     _isErasing     = false;
     uint8_t  _eraseProgress = 0;
 
-    uint32_t            _securityCode  = 123456;
-    _Pending            _pendingCmd    = _Pending::NONE;
-
-    // Pending start args (saved while waiting for unlock ACK)
-    DataRate  _pendingRate            = DataRate::HZ_25;
-    bool      _pendingStationary      = false;
-    bool      _pendingNoFix           = false;
-    uint8_t   _pendingAutoShutdown    = 0;
+    uint32_t _securityCode = 123456;
+    _Pending _pendingCmd   = _Pending::NONE;
 
     bool _sendUnlock();
-    void _sendConfig(uint8_t command, DataRate rate,
-                     bool stationaryFilter, bool noFixFilter,
-                     uint8_t autoShutdownMin);
+    void _sendConfig(uint8_t command);
     void _sendErase();
 };

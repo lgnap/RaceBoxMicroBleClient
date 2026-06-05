@@ -12,6 +12,8 @@
  *   ERASE CANCEL       Cancel an ongoing erase
  *   RECBENCH           Auto-chain 3 sessions (10s / 30s / 60s) with live status
  *   RECBENCH STOP      Abort RECBENCH early
+ *   CONFIG TEST        Verify config is preserved across stop/start (no re-send)
+ *   CONFIG VERIFY      Single-shot: use stored config, start, print confirmed config
  *   DOWNLOAD           Download stored history (switches to downloader mode)
  *   LIVE               Toggle live data printing ON/OFF
  *   RAWDUMP            Toggle raw UBX packet hex dump (protocol debugging)
@@ -57,6 +59,24 @@ static uint8_t linePos = 0;
 static bool _liveEnabled   = true;   // print live GPS data
 static bool _downloadMode  = false;  // true while downloader is active
 static bool _downloadDone  = false;
+
+// ── CONFIG TEST / CONFIG VERIFY state machine ─────────────────────────────────
+// CONFIG TEST: explicit config → start → stop → no-args start → compare confirmed configs
+// CONFIG VERIFY: set stored config → no-args start → print confirmed config → stop
+enum class ConfigTestPhase : uint8_t {
+    IDLE,
+    CT_WAIT_START1,  // CONFIG TEST: waiting for 1st RECORDING_START
+    CT_WAIT_STOP1,   // CONFIG TEST: waiting for RECORDING_STOP after 1st session
+    CT_WAIT_START2,  // CONFIG TEST: waiting for 2nd RECORDING_START (no-args re-start)
+    CT_WAIT_STOP2,   // CONFIG TEST: waiting for final RECORDING_STOP
+    CV_WAIT_START,   // CONFIG VERIFY: waiting for RECORDING_START
+    CV_WAIT_STOP,    // CONFIG VERIFY: waiting for RECORDING_STOP
+};
+
+static ConfigTestPhase _cfgTestPhase = ConfigTestPhase::IDLE;
+static RecordingConfig _cfgConfirmed1;  // confirmed config from 1st session start
+static RecordingConfig _cfgConfirmed2;  // confirmed config from 2nd session start (no-args)
+static RecordingConfig _cfgCaptured;    // confirmed config for CONFIG VERIFY
 
 // ── RECBENCH state machine ────────────────────────────────────────────────────
 // RECBENCH chains N recording sessions with configurable durations.
@@ -248,6 +268,32 @@ static void dispatch(const char* line) {
             Serial.println("[RECBENCH] Aborted");
         }
 
+    } else if (strcmp(line, "CONFIG TEST") == 0) {
+        if (!racebox.isConnected()) { Serial.println("ERROR not connected"); return; }
+        if (_cfgTestPhase != ConfigTestPhase::IDLE) {
+            Serial.println("ERROR CONFIG TEST already running"); return;
+        }
+        if (_benchRecState != BenchRecState::IDLE) {
+            Serial.println("ERROR RECBENCH running — abort first with RECBENCH STOP"); return;
+        }
+        if (_downloadMode) activateRecorder();
+        // Use a recognisable test config: HZ_10, stationary filter, no-fix off, 1 min shutdown
+        _cfgTestPhase = ConfigTestPhase::CT_WAIT_START1;
+        Serial.println("[CFGTEST] Starting phase 1 — explicit config: HZ_10, stationary=yes, shutdown=1min");
+        rec.startRecording(DataRate::HZ_10, /*stationary=*/true, /*noFix=*/false, /*shutdownMin=*/1);
+
+    } else if (strcmp(line, "CONFIG VERIFY") == 0) {
+        if (!racebox.isConnected()) { Serial.println("ERROR not connected"); return; }
+        if (_cfgTestPhase != ConfigTestPhase::IDLE) {
+            Serial.println("ERROR CONFIG TEST already running"); return;
+        }
+        if (_downloadMode) activateRecorder();
+        const RecordingConfig& cfg = rec.config();
+        _cfgTestPhase = ConfigTestPhase::CV_WAIT_START;
+        Serial.printf("[CFGVERIFY] Starting with stored config: rate=%dHz, stationary=%d, nofix=%d, shutdown=%umin\n",
+                      (int)cfg.rate, (int)cfg.stationaryFilter, (int)cfg.noFixFilter, cfg.autoShutdownMin);
+        rec.startRecording();  // no-args: uses stored _config
+
     } else if (strcmp(line, "DOWNLOAD") == 0) {
         if (!racebox.isConnected()) { Serial.println("ERROR not connected"); return; }
         dl.begin();  // registers downloader callback, sends 0xFF/0x23 trigger
@@ -257,7 +303,9 @@ static void dispatch(const char* line) {
 
     } else {
         Serial.printf("ERROR unknown command: %s\n", line);
-        Serial.println("Commands: PING  LIVE  RAWDUMP  FIFO  STATUS  REC START [hz]  REC STOP  ERASE  ERASE CANCEL  DOWNLOAD  RECBENCH  RECBENCH STOP");
+        Serial.println("Commands: PING  LIVE  RAWDUMP  FIFO  STATUS  REC START [hz]  REC STOP");
+        Serial.println("          ERASE  ERASE CANCEL  RECBENCH  RECBENCH STOP");
+        Serial.println("          CONFIG TEST  CONFIG VERIFY  DOWNLOAD");
     }
 }
 
@@ -266,7 +314,9 @@ void setup() {
     Serial.begin(115200);
     delay(500);
     Serial.println("=== RaceBoxMicroBleClient LibTest ===");
-    Serial.println("Commands: PING  LIVE  RAWDUMP  FIFO  STATUS  REC START [hz]  REC STOP  DOWNLOAD");
+    Serial.println("Commands: PING  LIVE  RAWDUMP  FIFO  STATUS  REC START [hz]  REC STOP");
+    Serial.println("          ERASE  ERASE CANCEL  RECBENCH  RECBENCH STOP");
+    Serial.println("          CONFIG TEST  CONFIG VERIFY  DOWNLOAD");
 
     racebox.setDebugCallback([](const char* msg) { Serial.println(msg); });
     racebox.setErrorCallback([](uint32_t count) {
@@ -287,6 +337,17 @@ void setup() {
             Serial.println("[ERASE] Complete ✓ — memory erased. Run STATUS to confirm.");
     });
 
+    // Capture confirmed config for CONFIG TEST / CONFIG VERIFY
+    rec.setConfigConfirmedCallback([](const RecordingConfig& c) {
+        if (_cfgTestPhase == ConfigTestPhase::CT_WAIT_START1) {
+            _cfgConfirmed1 = c;
+        } else if (_cfgTestPhase == ConfigTestPhase::CT_WAIT_START2) {
+            _cfgConfirmed2 = c;
+        } else if (_cfgTestPhase == ConfigTestPhase::CV_WAIT_START) {
+            _cfgCaptured = c;
+        }
+    });
+
     rec.setStateChangeCallback([](StateChangeEvent ev) {
         const char* evStr;
         switch (ev) {
@@ -298,7 +359,88 @@ void setup() {
         }
         Serial.printf("[STATE] %s\n", evStr);
 
-        // RECBENCH state machine: advance on state change events
+        // ── CONFIG TEST state machine ─────────────────────────────────────────
+        if (_cfgTestPhase == ConfigTestPhase::CT_WAIT_START1 &&
+            ev == StateChangeEvent::RECORDING_START) {
+            Serial.println("[CFGTEST] Phase 1 START confirmed — stopping to re-start without config...");
+            _cfgTestPhase = ConfigTestPhase::CT_WAIT_STOP1;
+            rec.stopRecording();
+            return;  // don't trigger RECBENCH
+        }
+        if (_cfgTestPhase == ConfigTestPhase::CT_WAIT_STOP1 &&
+            ev == StateChangeEvent::RECORDING_STOP) {
+            Serial.println("[CFGTEST] Phase 1 STOP — re-starting with stored config (no-args)...");
+            _cfgTestPhase = ConfigTestPhase::CT_WAIT_START2;
+            rec.startRecording();  // no-args: uses _config stored from phase 1
+            return;
+        }
+        if (_cfgTestPhase == ConfigTestPhase::CT_WAIT_START2 &&
+            ev == StateChangeEvent::RECORDING_START) {
+            Serial.println("[CFGTEST] Phase 2 START confirmed — stopping...");
+            _cfgTestPhase = ConfigTestPhase::CT_WAIT_STOP2;
+            rec.stopRecording();
+            return;
+        }
+        if (_cfgTestPhase == ConfigTestPhase::CT_WAIT_STOP2 &&
+            ev == StateChangeEvent::RECORDING_STOP) {
+            _cfgTestPhase = ConfigTestPhase::IDLE;
+            // Compare both confirmed configs
+            bool rateOk  = (_cfgConfirmed1.rate             == _cfgConfirmed2.rate);
+            bool statOk  = (_cfgConfirmed1.stationaryFilter  == _cfgConfirmed2.stationaryFilter);
+            bool nofixOk = (_cfgConfirmed1.noFixFilter       == _cfgConfirmed2.noFixFilter);
+            bool shutOk  = (_cfgConfirmed1.autoShutdownSecs  == _cfgConfirmed2.autoShutdownSecs);
+            bool pass    = rateOk && statOk && nofixOk && shutOk;
+            Serial.println("[CFGTEST] =========== RESULT ===========");
+            Serial.printf("[CFGTEST] Rate       : %d Hz → %d Hz %s\n",
+                          (int)_cfgConfirmed1.rate, (int)_cfgConfirmed2.rate,
+                          rateOk ? "OK" : "MISMATCH");
+            Serial.printf("[CFGTEST] Stationary : %d → %d %s\n",
+                          _cfgConfirmed1.stationaryFilter, _cfgConfirmed2.stationaryFilter,
+                          statOk ? "OK" : "MISMATCH");
+            Serial.printf("[CFGTEST] NoFix      : %d → %d %s\n",
+                          _cfgConfirmed1.noFixFilter, _cfgConfirmed2.noFixFilter,
+                          nofixOk ? "OK" : "MISMATCH");
+            Serial.printf("[CFGTEST] Shutdown   : %u s → %u s %s\n",
+                          _cfgConfirmed1.autoShutdownSecs, _cfgConfirmed2.autoShutdownSecs,
+                          shutOk ? "OK" : "MISMATCH");
+            Serial.println(pass
+                ? "[CFGTEST] >>> PASS: config preserved across stop/start <<<"
+                : "[CFGTEST] >>> FAIL: config changed between sessions <<<");
+            Serial.println("[CFGTEST] ================================");
+            return;
+        }
+
+        // ── CONFIG VERIFY state machine ───────────────────────────────────────
+        if (_cfgTestPhase == ConfigTestPhase::CV_WAIT_START &&
+            ev == StateChangeEvent::RECORDING_START) {
+            Serial.println("[CFGVERIFY] START confirmed — stopping...");
+            _cfgTestPhase = ConfigTestPhase::CV_WAIT_STOP;
+            rec.stopRecording();
+            return;
+        }
+        if (_cfgTestPhase == ConfigTestPhase::CV_WAIT_STOP &&
+            ev == StateChangeEvent::RECORDING_STOP) {
+            _cfgTestPhase = ConfigTestPhase::IDLE;
+            Serial.println("[CFGVERIFY] ====== Confirmed Config from Device ======");
+            Serial.printf("[CFGVERIFY] Rate             : %d Hz\n", (int)_cfgCaptured.rate);
+            Serial.printf("[CFGVERIFY] StationaryFilter : %s",
+                          _cfgCaptured.stationaryFilter ? "yes" : "no");
+            if (_cfgCaptured.stationaryFilter)
+                Serial.printf(" (speed<%u mm/s, interval=%u s)",
+                              _cfgCaptured.stationarySpeedMmS, _cfgCaptured.stationaryIntervalS);
+            Serial.println();
+            Serial.printf("[CFGVERIFY] NoFixFilter      : %s",
+                          _cfgCaptured.noFixFilter ? "yes" : "no");
+            if (_cfgCaptured.noFixFilter)
+                Serial.printf(" (interval=%u s)", _cfgCaptured.noFixIntervalS);
+            Serial.println();
+            Serial.printf("[CFGVERIFY] AutoShutdown     : %u s\n",
+                          _cfgCaptured.autoShutdownSecs);
+            Serial.println("[CFGVERIFY] ==========================================");
+            return;
+        }
+
+        // ── RECBENCH state machine: advance on state change events ────────────
         if (_benchRecState == BenchRecState::STARTING &&
             ev == StateChangeEvent::RECORDING_START) {
             uint32_t durMs = BENCH_SESSION_DURATIONS_MS[_benchRecSession];

@@ -27,6 +27,15 @@ void RaceBoxRecorder::update() {
     }
 }
 
+// ── setConfig() ───────────────────────────────────────────────────────────────
+void RaceBoxRecorder::setConfig(DataRate rate, bool stationaryFilter,
+                                 bool noFixFilter, uint8_t autoShutdownMin) {
+    _config.rate              = rate;
+    _config.stationaryFilter  = stationaryFilter;
+    _config.noFixFilter       = noFixFilter;
+    _config.autoShutdownMin   = autoShutdownMin;
+}
+
 // ── _sendUnlock() — internal ─────────────────────────────────────────────────
 bool RaceBoxRecorder::_sendUnlock() {
     UbxPacket pkt{};
@@ -57,15 +66,17 @@ void RaceBoxRecorder::queryStatus() {
     }
 }
 
-// ── startRecording() ──────────────────────────────────────────────────────────
+// ── startRecording() — uses stored config ─────────────────────────────────────
+void RaceBoxRecorder::startRecording() {
+    _pendingCmd = _Pending::START;
+    _sendUnlock();
+}
+
+// ── startRecording() — explicit config (also updates stored config) ───────────
 void RaceBoxRecorder::startRecording(DataRate rate, bool stationaryFilter,
                                       bool noFixFilter, uint8_t autoShutdownMin) {
-    // Save args, send unlock first; _sendConfig called on unlock ACK
-    _pendingRate         = rate;
-    _pendingStationary   = stationaryFilter;
-    _pendingNoFix        = noFixFilter;
-    _pendingAutoShutdown = autoShutdownMin;
-    _pendingCmd          = _Pending::START;
+    setConfig(rate, stationaryFilter, noFixFilter, autoShutdownMin);
+    _pendingCmd = _Pending::START;
     _sendUnlock();
 }
 
@@ -122,9 +133,7 @@ void RaceBoxRecorder::_sendErase() {
 //   [6..7]  Stationary detection interval (UInt16 LE, seconds)
 //   [8..9]  No-fix detection interval (UInt16 LE, seconds)
 //   [10..11] Auto-shutdown detection interval (UInt16 LE, seconds)
-void RaceBoxRecorder::_sendConfig(uint8_t command, DataRate rate,
-                                   bool stationaryFilter, bool noFixFilter,
-                                   uint8_t autoShutdownMin) {
+void RaceBoxRecorder::_sendConfig(uint8_t command) {
     UbxPacket pkt{};
     pkt.cls = UBX_CLASS_RACEBOX;
     pkt.id  = UBX_ID_REC_CONFIG;
@@ -132,29 +141,29 @@ void RaceBoxRecorder::_sendConfig(uint8_t command, DataRate rate,
     memset(pkt.payload, 0, 12);
 
     pkt.payload[0] = command;
-    pkt.payload[1] = static_cast<uint8_t>(rate);
+    pkt.payload[1] = static_cast<uint8_t>(_config.rate);
 
     uint8_t flags = 0;
-    if (stationaryFilter) flags |= (1 << 1);
-    if (noFixFilter)      flags |= (1 << 2);
-    if (autoShutdownMin)  flags |= (1 << 3);
+    if (_config.stationaryFilter) flags |= (1 << 1);
+    if (_config.noFixFilter)      flags |= (1 << 2);
+    if (_config.autoShutdownMin)  flags |= (1 << 3);
     pkt.payload[2] = flags;
     // payload[3] = reserved = 0
 
     // Stationary filter: speed < 1389 mm/s (~5 km/h) for 30 s
-    if (stationaryFilter) {
+    if (_config.stationaryFilter) {
         pkt.payload[4] = 0x6D; pkt.payload[5] = 0x05;  // 1389 LE
         pkt.payload[6] = 30;   pkt.payload[7] = 0;
     }
 
     // No-fix filter: 30 s
-    if (noFixFilter) {
+    if (_config.noFixFilter) {
         pkt.payload[8] = 30; pkt.payload[9] = 0;
     }
 
     // Auto-shutdown: convert minutes → seconds
-    if (autoShutdownMin) {
-        uint16_t secs = (uint16_t)autoShutdownMin * 60;
+    if (_config.autoShutdownMin) {
+        uint16_t secs = (uint16_t)_config.autoShutdownMin * 60;
         pkt.payload[10] = secs & 0xFF;
         pkt.payload[11] = (secs >> 8) & 0xFF;
     }
@@ -162,7 +171,7 @@ void RaceBoxRecorder::_sendConfig(uint8_t command, DataRate rate,
     if (_ble.sendCommand(pkt)) {
         _cmdSentMs = millis();
         Serial.printf("[Recorder] Config sent: cmd=%d rate=%d flags=0x%02X\n",
-                      command, (int)rate, flags);
+                      command, (int)_config.rate, flags);
     }
 }
 
@@ -211,10 +220,9 @@ void RaceBoxRecorder::_onPacket(const UbxPacket& pkt) {
             _Pending pending = _pendingCmd;
             _pendingCmd = _Pending::NONE;
             if (pending == _Pending::START) {
-                _sendConfig(0x01, _pendingRate, _pendingStationary,
-                            _pendingNoFix, _pendingAutoShutdown);
+                _sendConfig(0x01);
             } else if (pending == _Pending::STOP) {
-                _sendConfig(0x00, _dataRate, false, false, 0);
+                _sendConfig(0x00);
             } else if (pending == _Pending::ERASE) {
                 _sendErase();
             }
@@ -255,30 +263,70 @@ void RaceBoxRecorder::_onPacket(const UbxPacket& pkt) {
 
     case UBX_ID_STATE_CHANGE:
         // 0xFF/0x26 (12 bytes, protocol rev 8):
-        //   [0]  Standalone Recording State (0=disabled, 1=running, 2=paused)
-        //   [1]  Reserved
-        //   [2]  Data Rate
-        //   [3]  Flags
-        //   [4..] filter/shutdown parameters (mirrors REC CONFIG payload)
+        //   [0]     Standalone Recording State (0=disabled, 1=running, 2=paused)
+        //   [1]     Reserved
+        //   [2]     Data Rate (Hz)
+        //   [3]     Flags bitmask: bit1=Stationary, bit2=NoFix, bit3=AutoShutdown
+        //   [4..5]  Stationary speed threshold (UInt16 LE, mm/s)
+        //   [6..7]  Stationary detection interval (UInt16 LE, seconds)
+        //   [8..9]  No-fix detection interval (UInt16 LE, seconds)
+        //   [10..11] Auto-shutdown interval (UInt16 LE, seconds)
         if (pkt.len >= 1) {
             _state = static_cast<RecordingState>(pkt.payload[0]);
+
+            // Map protocol state byte to event enum
+            StateChangeEvent ev;
+            switch (pkt.payload[0]) {
+                case 1:  ev = StateChangeEvent::RECORDING_START;  break;
+                case 2:  ev = StateChangeEvent::RECORDING_PAUSE;  break;
+                default: ev = StateChangeEvent::RECORDING_STOP;   break;
+            }
+
             if (pkt.len >= 3) {
                 _dataRate = static_cast<DataRate>(pkt.payload[2]);
             }
-            if (_stateChangeCb) {
-                // Map protocol state byte to StateChangeEvent:
-                //   0=disabled → RECORDING_STOP
-                //   1=running  → RECORDING_START
-                //   2=paused   → RECORDING_PAUSE
-                StateChangeEvent ev;
-                switch (pkt.payload[0]) {
-                    case 0:  ev = StateChangeEvent::RECORDING_STOP;   break;
-                    case 1:  ev = StateChangeEvent::RECORDING_START;  break;
-                    case 2:  ev = StateChangeEvent::RECORDING_PAUSE;  break;
-                    default: ev = StateChangeEvent::RECORDING_STOP;   break;
+
+            // Parse full confirmed config (recording-start only: state == 1)
+            if (pkt.payload[0] == 1 && pkt.len >= 12) {
+                uint8_t flags = pkt.payload[3];
+
+                _confirmedConfig.rate             = static_cast<DataRate>(pkt.payload[2]);
+                _confirmedConfig.stationaryFilter = (flags >> 1) & 0x01;
+                _confirmedConfig.noFixFilter      = (flags >> 2) & 0x01;
+                _confirmedConfig.autoShutdownMin  = (flags >> 3) & 0x01;  // bool presence only
+
+                _confirmedConfig.stationarySpeedMmS =
+                    static_cast<uint16_t>(pkt.payload[4]) |
+                    (static_cast<uint16_t>(pkt.payload[5]) << 8);
+                _confirmedConfig.stationaryIntervalS =
+                    static_cast<uint16_t>(pkt.payload[6]) |
+                    (static_cast<uint16_t>(pkt.payload[7]) << 8);
+                _confirmedConfig.noFixIntervalS =
+                    static_cast<uint16_t>(pkt.payload[8]) |
+                    (static_cast<uint16_t>(pkt.payload[9]) << 8);
+                _confirmedConfig.autoShutdownSecs =
+                    static_cast<uint16_t>(pkt.payload[10]) |
+                    (static_cast<uint16_t>(pkt.payload[11]) << 8);
+
+                Serial.printf("[Recorder] Confirmed config: rate=%d flags=0x%02X "
+                              "statSpd=%u statInt=%u noFixInt=%u shutdownSecs=%u\n",
+                              (int)_confirmedConfig.rate, flags,
+                              _confirmedConfig.stationarySpeedMmS,
+                              _confirmedConfig.stationaryIntervalS,
+                              _confirmedConfig.noFixIntervalS,
+                              _confirmedConfig.autoShutdownSecs);
+
+                // Warn on rate mismatch (filters cannot be compared directly —
+                // device may apply different thresholds than we suggested)
+                if (_confirmedConfig.rate != _config.rate) {
+                    Serial.printf("[Recorder] WARNING rate mismatch: sent=%d confirmed=%d\n",
+                                  (int)_config.rate, (int)_confirmedConfig.rate);
                 }
-                _stateChangeCb(ev);
+
+                if (_configConfirmedCb) _configConfirmedCb(_confirmedConfig);
             }
+
+            if (_stateChangeCb) _stateChangeCb(ev);
         }
         break;
 

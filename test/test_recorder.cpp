@@ -59,6 +59,29 @@ static UbxPacket makeStateChange(uint8_t event) {
     return p;
 }
 
+// Full 12-byte STATE_CHANGE (mirrors REC CONFIG payload after [0..1])
+static UbxPacket makeStateChangeFull(uint8_t state, uint8_t rate, uint8_t flags,
+                                     uint16_t statSpd, uint16_t statInt,
+                                     uint16_t nofixInt, uint16_t shutdownSecs) {
+    UbxPacket p{};
+    p.cls        = UBX_CLASS_RACEBOX;
+    p.id         = UBX_ID_STATE_CHANGE;
+    p.len        = 12;
+    p.payload[0]  = state;
+    p.payload[1]  = 0;  // reserved
+    p.payload[2]  = rate;
+    p.payload[3]  = flags;
+    p.payload[4]  = (uint8_t)(statSpd & 0xFF);
+    p.payload[5]  = (uint8_t)((statSpd >> 8) & 0xFF);
+    p.payload[6]  = (uint8_t)(statInt & 0xFF);
+    p.payload[7]  = (uint8_t)((statInt >> 8) & 0xFF);
+    p.payload[8]  = (uint8_t)(nofixInt & 0xFF);
+    p.payload[9]  = (uint8_t)((nofixInt >> 8) & 0xFF);
+    p.payload[10] = (uint8_t)(shutdownSecs & 0xFF);
+    p.payload[11] = (uint8_t)((shutdownSecs >> 8) & 0xFF);
+    return p;
+}
+
 // ── Initial state ─────────────────────────────────────────────────────────────
 
 void test_initial_state_is_unknown() {
@@ -289,6 +312,112 @@ void test_start_with_filters_encodes_correctly() {
     TEST_ASSERT_EQUAL_HEX8(0x01, g_stubLastSent.payload[11]);
 }
 
+// ── setConfig() + no-args startRecording() ────────────────────────────────────
+
+void test_setConfig_stores_rate() {
+    RaceBoxBle ble;
+    RaceBoxRecorder rec(ble);
+    rec.setConfig(DataRate::HZ_10, false, false, 0);
+    TEST_ASSERT_EQUAL((int)DataRate::HZ_10, (int)rec.config().rate);
+}
+
+void test_setConfig_stores_filters() {
+    RaceBoxBle ble;
+    RaceBoxRecorder rec(ble);
+    rec.setConfig(DataRate::HZ_5, true, true, 3);
+    TEST_ASSERT_TRUE(rec.config().stationaryFilter);
+    TEST_ASSERT_TRUE(rec.config().noFixFilter);
+    TEST_ASSERT_EQUAL(3, rec.config().autoShutdownMin);
+}
+
+void test_startRecording_noargs_uses_stored_config_rate() {
+    RaceBoxBle ble;
+    RaceBoxRecorder rec(ble);
+    rec.begin();
+    rec.setConfig(DataRate::HZ_5, false, false, 0);
+    rec.startRecording();  // no-args: should use HZ_5
+    rec._onPacket(makeUnlockAck());
+    TEST_ASSERT_EQUAL_HEX8(UBX_ID_REC_CONFIG, g_stubLastSent.id);
+    TEST_ASSERT_EQUAL_HEX8(5, g_stubLastSent.payload[1]);  // rate = 5 Hz
+}
+
+void test_explicit_startRecording_updates_stored_config() {
+    RaceBoxBle ble;
+    RaceBoxRecorder rec(ble);
+    rec.begin();
+    rec.setConfig(DataRate::HZ_5, false, false, 0);
+    rec.startRecording(DataRate::HZ_25, /*stationary=*/true, false, 0);
+    TEST_ASSERT_EQUAL((int)DataRate::HZ_25, (int)rec.config().rate);
+    TEST_ASSERT_TRUE(rec.config().stationaryFilter);
+}
+
+// ── Full STATE_CHANGE payload parsing (issue #21) ─────────────────────────────
+
+void test_state_change_full_payload_populates_confirmed_config() {
+    RaceBoxBle ble;
+    RaceBoxRecorder rec(ble);
+    // rate=10, flags: bit1=stationary + bit2=nofix = 0x06, statSpd=1389, intervals=30, shutdown=0
+    UbxPacket pkt = makeStateChangeFull(1, 10, 0x06, 1389, 30, 30, 0);
+    rec._onPacket(pkt);
+    const RecordingConfig& c = rec.confirmedConfig();
+    TEST_ASSERT_EQUAL((int)DataRate::HZ_10, (int)c.rate);
+    TEST_ASSERT_TRUE(c.stationaryFilter);
+    TEST_ASSERT_TRUE(c.noFixFilter);
+    TEST_ASSERT_EQUAL(1389u, c.stationarySpeedMmS);
+    TEST_ASSERT_EQUAL(30u,   c.stationaryIntervalS);
+    TEST_ASSERT_EQUAL(30u,   c.noFixIntervalS);
+    TEST_ASSERT_EQUAL(0u,    c.autoShutdownSecs);
+}
+
+void test_state_change_full_payload_fires_config_confirmed_callback() {
+    RaceBoxBle ble;
+    RaceBoxRecorder rec(ble);
+    bool cbFired = false;
+    DataRate capturedRate = DataRate::HZ_1;
+    rec.setConfigConfirmedCallback([&](const RecordingConfig& c) {
+        cbFired = true;
+        capturedRate = c.rate;
+    });
+    UbxPacket pkt = makeStateChangeFull(1, 25, 0x00, 0, 0, 0, 0);
+    rec._onPacket(pkt);
+    TEST_ASSERT_TRUE(cbFired);
+    TEST_ASSERT_EQUAL((int)DataRate::HZ_25, (int)capturedRate);
+}
+
+void test_state_change_stop_does_not_update_confirmed_config() {
+    RaceBoxBle ble;
+    RaceBoxRecorder rec(ble);
+    // First: a full start → confirmed rate = HZ_10
+    rec._onPacket(makeStateChangeFull(1, 10, 0x00, 0, 0, 0, 0));
+    TEST_ASSERT_EQUAL((int)DataRate::HZ_10, (int)rec.confirmedConfig().rate);
+    // Then: stop (state=0) — confirmed should NOT change
+    rec._onPacket(makeStateChangeFull(0, 25, 0x00, 0, 0, 0, 0));
+    TEST_ASSERT_EQUAL((int)DataRate::HZ_10, (int)rec.confirmedConfig().rate);
+}
+
+void test_state_change_no_confirmed_callback_does_not_crash() {
+    RaceBoxBle ble;
+    RaceBoxRecorder rec(ble);
+    // No callback set — must not crash
+    UbxPacket pkt = makeStateChangeFull(1, 25, 0x06, 1389, 30, 30, 300);
+    rec._onPacket(pkt);
+    TEST_PASS();
+}
+
+void test_state_change_short_payload_no_confirmed_update() {
+    RaceBoxBle ble;
+    RaceBoxRecorder rec(ble);
+    // len < 12 — confirmed config must remain at zero defaults
+    UbxPacket p{};
+    p.cls = UBX_CLASS_RACEBOX;
+    p.id  = UBX_ID_STATE_CHANGE;
+    p.len = 3;   // state + reserved + rate only
+    p.payload[0] = 1;  // RECORDING_START
+    p.payload[2] = 10;
+    rec._onPacket(p);
+    TEST_ASSERT_EQUAL(0u, rec.confirmedConfig().stationarySpeedMmS);
+}
+
 // ── Erase ─────────────────────────────────────────────────────────────────────
 
 static UbxPacket makeEraseAck() {
@@ -406,6 +535,15 @@ int main() {
     RUN_TEST(test_start_recording_sends_unlock_then_config);
     RUN_TEST(test_stop_recording_sends_unlock_then_stop);
     RUN_TEST(test_start_with_filters_encodes_correctly);
+    RUN_TEST(test_setConfig_stores_rate);
+    RUN_TEST(test_setConfig_stores_filters);
+    RUN_TEST(test_startRecording_noargs_uses_stored_config_rate);
+    RUN_TEST(test_explicit_startRecording_updates_stored_config);
+    RUN_TEST(test_state_change_full_payload_populates_confirmed_config);
+    RUN_TEST(test_state_change_full_payload_fires_config_confirmed_callback);
+    RUN_TEST(test_state_change_stop_does_not_update_confirmed_config);
+    RUN_TEST(test_state_change_no_confirmed_callback_does_not_crash);
+    RUN_TEST(test_state_change_short_payload_no_confirmed_update);
     RUN_TEST(test_erase_sends_unlock_then_erase_command);
     RUN_TEST(test_erase_progress_callback_fires);
     RUN_TEST(test_erase_complete_on_erase_ack);
