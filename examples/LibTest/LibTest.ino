@@ -572,8 +572,9 @@ void loop() {
         if (rec.state() != lastState || rec.recordCount() != lastCount) {
             uint32_t newCount = rec.recordCount();
             // RECBENCH: capture baseline from first STATUS after session start.
-            // _benchRecBaseSet prevents the baseline from drifting on subsequent STATUSes.
-            if (_benchRecState == BenchRecState::RECORDING && !_benchRecBaseSet) {
+            // Guard newCount > 0: when session 1 starts, recordCount() is 0 (no STATUS yet);
+            // the real baseline is the count returned by the first STATUS response.
+            if (_benchRecState == BenchRecState::RECORDING && !_benchRecBaseSet && newCount > 0) {
                 _benchRecordsAtSessionStart = newCount;
                 _benchRecBaseSet = true;
             }
