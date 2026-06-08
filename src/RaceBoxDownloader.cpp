@@ -114,6 +114,7 @@ void RaceBoxDownloader::_onPacket(const UbxPacket& pkt) {
     case UBX_ID_HISTORY:
         // 0xFF/0x21: identical 80-byte payload to live 0xFF/0x01
         if (_state == State::RECEIVING && _onRecord) {
+            if (_startRxMs == 0) _startRxMs = millis();  // stamp first record
             RaceBoxData d{};
             if (raceBoxParse(pkt, d)) {
                 _onRecord(d, _recordCount);

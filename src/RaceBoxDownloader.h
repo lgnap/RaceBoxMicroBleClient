@@ -77,6 +77,9 @@ public:
         uint32_t pct = (_recordCount * 100UL) / _expectedCount;
         return pct > 100 ? 100 : static_cast<uint8_t>(pct);
     }
+    // millis() timestamp when the first history record arrived.
+    // Returns 0 if no records received yet. Use for average speed calculation.
+    uint32_t downloadStartMs() const { return _startRxMs; }
 
     // Called by packet callback — do not call directly.
     void _onPacket(const UbxPacket& pkt);
@@ -92,6 +95,7 @@ private:
     uint32_t _expectedCount = 0;
     uint32_t _recordCount   = 0;
     uint32_t _lastRxMs      = 0;  // millis() of last received packet
+    uint32_t _startRxMs     = 0;  // millis() when first record arrived (RECEIVING)
 
     uint32_t _securityCode    = 0;
     bool     _hasSecurityCode = false;

@@ -369,6 +369,33 @@ void test_timeout_with_expected_zero_sets_error() {
     TEST_ASSERT_FALSE(dl.isDone());
 }
 
+void test_download_start_ms_zero_before_first_record() {
+    RaceBoxBle ble;
+    RaceBoxDownloader dl(ble, nullptr);
+    bringToReceiving(dl, 5);
+    TEST_ASSERT_EQUAL(0u, dl.downloadStartMs());
+}
+
+void test_download_start_ms_set_on_first_record() {
+    RaceBoxBle ble;
+    RaceBoxDownloader dl(ble, [](const RaceBoxData&, uint32_t) {});
+    bringToReceiving(dl, 5);
+    _fakeMillis = 1234;
+    dl._onPacket(makeHistoryRecord());
+    TEST_ASSERT_EQUAL(1234u, dl.downloadStartMs());
+}
+
+void test_download_start_ms_not_updated_on_subsequent_records() {
+    RaceBoxBle ble;
+    RaceBoxDownloader dl(ble, [](const RaceBoxData&, uint32_t) {});
+    bringToReceiving(dl, 5);
+    _fakeMillis = 100;
+    dl._onPacket(makeHistoryRecord());
+    _fakeMillis = 200;
+    dl._onPacket(makeHistoryRecord());
+    TEST_ASSERT_EQUAL(100u, dl.downloadStartMs());
+}
+
 // ── Security code / memory unlock (0xFF/0x30) ─────────────────────────────────
 
 static UbxPacket makeUnlockAck() {
@@ -505,6 +532,9 @@ int main() {
     RUN_TEST(test_timeout_with_all_records_received_sets_done);
     RUN_TEST(test_timeout_with_partial_records_still_sets_error);
     RUN_TEST(test_timeout_with_expected_zero_sets_error);
+    RUN_TEST(test_download_start_ms_zero_before_first_record);
+    RUN_TEST(test_download_start_ms_set_on_first_record);
+    RUN_TEST(test_download_start_ms_not_updated_on_subsequent_records);
     RUN_TEST(test_no_security_code_sends_download_trigger);
     RUN_TEST(test_security_code_sends_unlock_first);
     RUN_TEST(test_security_code_payload_little_endian);
