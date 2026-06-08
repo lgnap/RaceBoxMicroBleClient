@@ -329,6 +329,46 @@ void test_no_error_just_before_timeout() {
     TEST_ASSERT_FALSE(dl.isError());
 }
 
+void test_timeout_with_all_records_received_sets_done() {
+    // All expected records received but ACK lost — timeout must declare DONE not ERROR.
+    RaceBoxBle ble;
+    RaceBoxDownloader dl(ble, [](const RaceBoxData&, uint32_t) {});
+    bringToReceiving(dl, 3);
+    dl._onPacket(makeHistoryRecord());
+    dl._onPacket(makeHistoryRecord());
+    dl._onPacket(makeHistoryRecord());
+    // recordCount == expectedCount == 3, but ACK never arrives
+    _fakeMillis = 30001;
+    dl.update();
+    TEST_ASSERT_TRUE(dl.isDone());
+    TEST_ASSERT_FALSE(dl.isError());
+}
+
+void test_timeout_with_partial_records_still_sets_error() {
+    // Only some records received — genuine timeout, must stay ERROR.
+    RaceBoxBle ble;
+    RaceBoxDownloader dl(ble, [](const RaceBoxData&, uint32_t) {});
+    bringToReceiving(dl, 10);
+    dl._onPacket(makeHistoryRecord());
+    dl._onPacket(makeHistoryRecord());
+    // recordCount=2, expectedCount=10
+    _fakeMillis = 30001;
+    dl.update();
+    TEST_ASSERT_TRUE(dl.isError());
+    TEST_ASSERT_FALSE(dl.isDone());
+}
+
+void test_timeout_with_expected_zero_sets_error() {
+    // expectedCount == 0 (no download response received) — must be ERROR not DONE.
+    RaceBoxBle ble;
+    RaceBoxDownloader dl(ble, nullptr);
+    dl.begin();  // state=REQUESTED, _expectedCount=0
+    _fakeMillis = 30001;
+    dl.update();
+    TEST_ASSERT_TRUE(dl.isError());
+    TEST_ASSERT_FALSE(dl.isDone());
+}
+
 // ── Security code / memory unlock (0xFF/0x30) ─────────────────────────────────
 
 static UbxPacket makeUnlockAck() {
@@ -462,6 +502,9 @@ int main() {
     RUN_TEST(test_progress_caps_at_100);
     RUN_TEST(test_timeout_sets_error_after_30s);
     RUN_TEST(test_no_error_just_before_timeout);
+    RUN_TEST(test_timeout_with_all_records_received_sets_done);
+    RUN_TEST(test_timeout_with_partial_records_still_sets_error);
+    RUN_TEST(test_timeout_with_expected_zero_sets_error);
     RUN_TEST(test_no_security_code_sends_download_trigger);
     RUN_TEST(test_security_code_sends_unlock_first);
     RUN_TEST(test_security_code_payload_little_endian);

@@ -76,8 +76,18 @@ void RaceBoxDownloader::eraseMemory() {
 void RaceBoxDownloader::update() {
     if (_state == State::REQUESTED || _state == State::RECEIVING) {
         if ((millis() - _lastRxMs) > TIMEOUT_MS) {
-            Serial.println("[Downloader] Timeout — no data received");
-            _state = State::ERROR;
+            // If all expected records were received, the ACK was simply lost —
+            // treat as a successful download rather than an error.
+            if (_state == State::RECEIVING
+                    && _expectedCount > 0
+                    && _recordCount >= _expectedCount) {
+                Serial.printf("[Downloader] All records received (%lu/%lu) — done (ACK lost)\n",
+                              (unsigned long)_recordCount, (unsigned long)_expectedCount);
+                _state = State::DONE;
+            } else {
+                Serial.println("[Downloader] Timeout — no data received");
+                _state = State::ERROR;
+            }
         }
     }
 }
