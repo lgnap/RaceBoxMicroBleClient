@@ -165,6 +165,11 @@ public:
     bool           isErasing()     const { return _isErasing; }
     uint8_t        eraseProgress() const { return _eraseProgress; }
 
+    // Returns true while an unlock→command round trip is in flight (not yet ACKed).
+    // Use this to wait for a pending stop/start/erase before handing the BLE
+    // packet callback to another driver (e.g. RaceBoxDownloader).
+    bool           isPending()     const { return _pendingCmd != _Pending::NONE || _cmdSentMs != 0; }
+
     // ── Callbacks ─────────────────────────────────────────────────────────────
 
     // Called on every 0xFF/0x26 STATE_CHANGE (start/stop/pause/resume).
