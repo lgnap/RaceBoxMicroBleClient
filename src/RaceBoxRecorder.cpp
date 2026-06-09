@@ -106,6 +106,7 @@ void RaceBoxRecorder::cancelErase() {
     pkt.payload[0] = 0x00;  // value ignored by device
     _ble.sendCommand(pkt);
     _isErasing = false;
+    _eraseProgressCb = nullptr;  // prevent stale deferred-disconnect from firing on next erase
     Serial.println("[Recorder] Erase cancelled");
 }
 
