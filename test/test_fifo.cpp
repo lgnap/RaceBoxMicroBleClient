@@ -149,12 +149,30 @@ void test_sync_recovery_skips_garbage() {
 }
 
 // ── Runner ────────────────────────────────────────────────────────────────────
+// ── Capacity is configurable at build time (RACEBOX_FIFO_BYTES) ──────────────
+// Projects whose packet callback can block (network writes during a history download)
+// raise it with -DRACEBOX_FIFO_BYTES=... instead of patching the header.
+void test_capacity_follows_configured_bytes() {
+    TEST_ASSERT_EQUAL(RACEBOX_FIFO_BYTES, RACEBOX_FIFO_SIZE);
+}
+
+#ifndef RACEBOX_FIFO_BYTES_FROM_BUILD
+// Default (no -D flag) must stay 4096 so existing users see no change.
+void test_default_capacity_is_4096() {
+    TEST_ASSERT_EQUAL(4096u, RACEBOX_FIFO_SIZE);
+}
+#endif
+
 int main() {
     UNITY_BEGIN();
     RUN_TEST(test_single_frame_extracted);
     RUN_TEST(test_multi_frame_three_frames_extracted_in_order);
     RUN_TEST(test_partial_frame_not_extracted);
     RUN_TEST(test_overflow_increments_counter);
+    RUN_TEST(test_capacity_follows_configured_bytes);
+#ifndef RACEBOX_FIFO_BYTES_FROM_BUILD
+    RUN_TEST(test_default_capacity_is_4096);
+#endif
     RUN_TEST(test_sync_recovery_skips_garbage);
     return UNITY_END();
 }
