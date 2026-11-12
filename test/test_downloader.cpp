@@ -503,6 +503,39 @@ void test_reset_security_code_to_zero_disables_unlock() {
 }
 
 // ── Runner ────────────────────────────────────────────────────────────────────
+// ── begin() resets per-download counters ─────────────────────────────────────
+// A second download with the same RaceBoxDownloader object used to keep the
+// previous run's recordCount / expectedCount / startRxMs, so the progress
+// went past 100 % and the average speed was wrong.
+void test_begin_resets_counters_for_second_download() {
+    RaceBoxBle ble;
+    uint32_t lastIndex = 999;
+    RaceBoxDownloader dl(ble, [&](const RaceBoxData&, uint32_t i) { lastIndex = i; });
+
+    // First download: 3 records, completed by the ACK.
+    bringToReceiving(dl, 3);
+    _fakeMillis = 100;
+    for (int i = 0; i < 3; i++) dl._onPacket(makeHistoryRecord());
+    dl._onPacket(makeDownloadAck());
+    TEST_ASSERT_TRUE(dl.isDone());
+    TEST_ASSERT_EQUAL(3u, dl.recordCount());
+    TEST_ASSERT_TRUE(dl.downloadStartMs() > 0);
+
+    // Second download on the same object: everything starts from zero.
+    dl.begin();
+    TEST_ASSERT_FALSE(dl.isDone());
+    TEST_ASSERT_EQUAL(0u, dl.recordCount());
+    TEST_ASSERT_EQUAL(0u, dl.expectedCount());
+    TEST_ASSERT_EQUAL(0u, dl.downloadStartMs());
+
+    dl._onPacket(makeDownloadResponse(2));
+    dl._onPacket(makeHistoryRecord());
+    TEST_ASSERT_EQUAL(0u, lastIndex);          // index restarts at 0
+    dl._onPacket(makeHistoryRecord());
+    TEST_ASSERT_EQUAL(2u, dl.recordCount());
+    TEST_ASSERT_EQUAL(100, dl.progressPercent());
+}
+
 int main() {
     UNITY_BEGIN();
     RUN_TEST(test_initial_state_not_done_not_error);
@@ -542,5 +575,6 @@ int main() {
     RUN_TEST(test_unlock_nack_sets_error);
     RUN_TEST(test_unlock_ack_then_download_response_receives_records);
     RUN_TEST(test_reset_security_code_to_zero_disables_unlock);
+    RUN_TEST(test_begin_resets_counters_for_second_download);
     return UNITY_END();
 }
