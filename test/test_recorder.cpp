@@ -497,6 +497,46 @@ void test_erase_complete_on_erase_ack() {
     TEST_ASSERT_TRUE(doneFired);
 }
 
+// The device reports 100 % when the erase is done; the final ACK (0xFF/0x02) can be lost,
+// e.g. when the client disconnects as soon as it sees 100 %. isErasing() must not stay true
+// forever (a UI stuck on "Erasing 100 %" and every later download deferred).
+void test_erase_progress_100_marks_erase_complete_without_ack() {
+    RaceBoxBle ble;
+    RaceBoxRecorder rec(ble);
+    rec.begin();
+    rec.eraseMemory();
+    rec._onPacket(makeUnlockAck());  // start erase
+    TEST_ASSERT_TRUE(rec.isErasing());
+
+    rec._onPacket(makeEraseProgress(99));
+    TEST_ASSERT_TRUE_MESSAGE(rec.isErasing(), "99 % is not done");
+
+    // At 100 % the flag must already be cleared when the callback runs, so a callback that
+    // disconnects at once sees a consistent state.
+    bool erasingInsideCallback = true;
+    rec.setEraseProgressCallback([&](uint8_t pct) {
+        if (pct == 100) erasingInsideCallback = rec.isErasing();
+    });
+    rec._onPacket(makeEraseProgress(100));
+    TEST_ASSERT_FALSE(rec.isErasing());
+    TEST_ASSERT_FALSE(erasingInsideCallback);
+    TEST_ASSERT_EQUAL(100, rec.eraseProgress());
+}
+
+// A late final ACK after 100 % is harmless.
+void test_erase_ack_after_100_percent_is_harmless() {
+    RaceBoxBle ble;
+    RaceBoxRecorder rec(ble);
+    rec.begin();
+    rec.eraseMemory();
+    rec._onPacket(makeUnlockAck());
+    rec._onPacket(makeEraseProgress(100));
+    rec._onPacket(makeEraseAck());
+    TEST_ASSERT_FALSE(rec.isErasing());
+    TEST_ASSERT_EQUAL(100, rec.eraseProgress());
+}
+
+
 void test_cancel_erase_sends_erase_with_payload() {
     RaceBoxBle ble;
     RaceBoxRecorder rec(ble);
@@ -561,6 +601,8 @@ int main() {
     RUN_TEST(test_erase_sends_unlock_then_erase_command);
     RUN_TEST(test_erase_progress_callback_fires);
     RUN_TEST(test_erase_complete_on_erase_ack);
+    RUN_TEST(test_erase_progress_100_marks_erase_complete_without_ack);
+    RUN_TEST(test_erase_ack_after_100_percent_is_harmless);
     RUN_TEST(test_cancel_erase_sends_erase_with_payload);
     RUN_TEST(test_erase_not_started_twice);
     return UNITY_END();

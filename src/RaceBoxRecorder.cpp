@@ -258,6 +258,15 @@ void RaceBoxRecorder::_onPacket(const UbxPacket& pkt) {
         if (pkt.len == 1) {
             _eraseProgress = pkt.payload[0];
             Serial.printf("[Recorder] Erase progress: %d%%\n", (int)_eraseProgress);
+            if (_eraseProgress >= 100 && _isErasing) {
+                // The device reports 100 % when the erase is done. The final ACK (0xFF/0x02)
+                // can be lost — typically when the client disconnects as soon as it sees
+                // 100 % — and isErasing() would then stay true forever (UI stuck on
+                // "Erasing 100 %", every later download deferred). Clear it BEFORE the
+                // callback so a callback that disconnects at once sees a consistent state.
+                _isErasing = false;
+                Serial.println("[Recorder] Erase complete (100 %)");
+            }
             if (_eraseProgressCb) _eraseProgressCb(_eraseProgress);
         }
         break;
