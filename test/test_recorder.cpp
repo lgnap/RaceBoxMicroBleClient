@@ -565,6 +565,34 @@ void test_erase_not_started_twice() {
 }
 
 // ── Runner ────────────────────────────────────────────────────────────────────
+// eraseAckReceived() tells a client that the device's FINAL ack arrived (it follows the
+// 100 % progress, which already clears isErasing()).
+void test_erase_ack_flag_only_set_by_final_ack() {
+    RaceBoxBle ble;
+    RaceBoxRecorder rec(ble);
+    rec.begin();
+    TEST_ASSERT_FALSE(rec.eraseAckReceived());
+    rec.eraseMemory();
+    rec._onPacket(makeUnlockAck());
+    rec._onPacket(makeEraseProgress(100));
+    TEST_ASSERT_FALSE_MESSAGE(rec.eraseAckReceived(), "100 % progress is not the final ACK");
+    rec._onPacket(makeEraseAck());
+    TEST_ASSERT_TRUE(rec.eraseAckReceived());
+}
+
+void test_erase_ack_flag_reset_by_new_erase() {
+    RaceBoxBle ble;
+    RaceBoxRecorder rec(ble);
+    rec.begin();
+    rec.eraseMemory();
+    rec._onPacket(makeUnlockAck());
+    rec._onPacket(makeEraseAck());
+    TEST_ASSERT_TRUE(rec.eraseAckReceived());
+    rec.eraseMemory();
+    rec._onPacket(makeUnlockAck());   // second erase starts
+    TEST_ASSERT_FALSE(rec.eraseAckReceived());
+}
+
 int main() {
     UNITY_BEGIN();
     RUN_TEST(test_initial_state_is_unknown);
@@ -603,6 +631,8 @@ int main() {
     RUN_TEST(test_erase_complete_on_erase_ack);
     RUN_TEST(test_erase_progress_100_marks_erase_complete_without_ack);
     RUN_TEST(test_erase_ack_after_100_percent_is_harmless);
+    RUN_TEST(test_erase_ack_flag_only_set_by_final_ack);
+    RUN_TEST(test_erase_ack_flag_reset_by_new_erase);
     RUN_TEST(test_cancel_erase_sends_erase_with_payload);
     RUN_TEST(test_erase_not_started_twice);
     return UNITY_END();

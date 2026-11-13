@@ -118,6 +118,7 @@ void RaceBoxRecorder::_sendErase() {
     pkt.len = 0;
     if (_ble.sendCommand(pkt)) {
         _isErasing     = true;
+        _eraseAckReceived = false;
         _eraseProgress = 0;
         _cmdSentMs     = millis();
         Serial.println("[Recorder] Erase started — this may take several minutes");
@@ -231,6 +232,7 @@ void RaceBoxRecorder::_onPacket(const UbxPacket& pkt) {
                                 && pkt.payload[1] == UBX_ID_ERASE) {
             // Erase complete
             _isErasing     = false;
+            _eraseAckReceived = true;
             _eraseProgress = 100;
             Serial.println("[Recorder] Erase complete");
             if (_eraseProgressCb) _eraseProgressCb(100);
