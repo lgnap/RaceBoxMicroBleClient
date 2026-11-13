@@ -163,6 +163,11 @@ public:
     DataRate       dataRate()      const { return _dataRate; }
     bool           lastAck()       const { return _lastAck; }
     bool           isErasing()     const { return _isErasing; }
+    // True once the device's final ACK (0xFF/0x02 for the erase command) has arrived for
+    // the current/last erase. isErasing() already drops at 100 % progress; the ACK comes
+    // after it, so a client that must not cut the link before it (deferred disconnect)
+    // waits on this flag. Reset when a new erase starts.
+    bool           eraseAckReceived() const { return _eraseAckReceived; }
     uint8_t        eraseProgress() const { return _eraseProgress; }
 
     // Returns true while an unlock→command round trip is in flight (not yet ACKed).
@@ -204,6 +209,7 @@ private:
     EraseProgressCallback    _eraseProgressCb;
 
     bool     _isErasing     = false;
+    bool     _eraseAckReceived = false;
     uint8_t  _eraseProgress = 0;
 
     uint32_t _securityCode = 123456;

@@ -9,6 +9,14 @@ RaceBoxDownloader::RaceBoxDownloader(RaceBoxBle& ble, HistoryCallback onRecord)
 
 // ── begin() ───────────────────────────────────────────────────────────────────
 void RaceBoxDownloader::begin() {
+    // Each download starts from zero. These were only initialised at construction,
+    // so a second begin() on the same object kept counting from the previous run
+    // (progress past 100 %, stale download-start timestamp).
+    _state         = State::IDLE;
+    _expectedCount = 0;
+    _recordCount   = 0;
+    _startRxMs     = 0;
+
     _ble.setPacketCallback([this](const UbxPacket& pkt) {
         _onPacket(pkt);
     });

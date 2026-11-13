@@ -10,9 +10,14 @@
 // FIFO capacity — enough for a burst of history records during download.
 // A full BLE notification is 244 bytes (~2-3 records of 88 bytes each).
 // The device streams at ~100 kbps during download; 4096 bytes ≈ 46 records
-// of headroom, covering ~320 ms with a fast callback.
-// Increase if your callback blocks (e.g. SD writes > 300 ms).
-static constexpr size_t RACEBOX_FIFO_SIZE = 4096;
+// of headroom, covering ~100 ms at the observed download rate (~440 records/s).
+// When the FIFO is full the OLDEST bytes are dropped (see overflowCount()).
+// Increase it if your packet callback can block (SD or network writes): build with
+// -DRACEBOX_FIFO_BYTES=16384 (≈ 180 records, ~0.4 s) instead of editing this header.
+#ifndef RACEBOX_FIFO_BYTES
+#define RACEBOX_FIFO_BYTES 4096
+#endif
+static constexpr size_t RACEBOX_FIFO_SIZE = RACEBOX_FIFO_BYTES;
 
 /**
  * Thread-safe ring buffer that accumulates raw BLE bytes and extracts
